@@ -1,0 +1,10 @@
+# Run Go formatting and linting
+$HOME/go/bin/goimports -w .
+go fmt ./...
+go vet ./...
+
+# Run Go tests
+go test ./...
+
+# Run prettier on JavaScript/JSON/Markdown files
+npx prettier --write "**/*.{js,json,md}"

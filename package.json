@@ -1,0 +1,21 @@
+{
+  "name": "samesame",
+  "version": "1.0.0",
+  "description": "The Web Bot Auth implementation for Anubis.",
+  "main": "index.js",
+  "scripts": {
+    "test": "go test ./...",
+    "fmt": "prettier --write \"**/*.{js,json,md}\" && $HOME/go/bin/goimports -w . && go fmt ./...",
+    "lint": "go vet ./...",
+    "prepare": "husky"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@commitlint/cli": "^20.1.0",
+    "@commitlint/config-conventional": "^20.0.0",
+    "husky": "^9.1.7",
+    "prettier": "^3.6.2"
+  }
+}

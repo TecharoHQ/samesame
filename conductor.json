@@ -1,0 +1,7 @@
+{
+  "scripts": {
+    "setup": "./scripts/conductor-setup.sh",
+    "test": "go test ./...",
+    "clean": "go clean -cache && rm -rf node_modules"
+  }
+}

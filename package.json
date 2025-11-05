@@ -1,11 +1,11 @@
 {
   "name": "samesame",
-  "version": "1.0.0",
+  "version": "0.0.0",
   "description": "The Web Bot Auth implementation for Anubis.",
   "main": "index.js",
   "scripts": {
     "test": "go test ./...",
-    "fmt": "prettier --write \"**/*.{js,json,md}\" && $HOME/go/bin/goimports -w . && go fmt ./...",
+    "fmt": "prettier --write \"**/*.{js,json,md}\" && go tool goimports -w . && go fmt ./...",
     "lint": "go vet ./...",
     "prepare": "husky"
   },

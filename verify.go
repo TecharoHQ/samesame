@@ -102,6 +102,10 @@ type Result struct {
 	Created time.Time
 	Expires time.Time
 	Nonce   string
+
+	// NonceChecked is true when a NonceStore saw this nonce for the first
+	// time. It is false when there was no nonce or no NonceStore.
+	NonceChecked bool
 }
 
 // Verifier checks web-bot-auth signatures on incoming requests.
@@ -355,7 +359,10 @@ func (v *Verifier) verifyOne(r *http.Request, sigInputs *httpsfv.Dictionary, age
 
 	// Only record nonces of signatures that verified, so a forger cannot
 	// burn a legitimate agent's nonce.
-	var nonce string
+	var (
+		nonce        string
+		nonceChecked bool
+	)
 	if d.Nonce != nil {
 		nonce = *d.Nonce
 	}
@@ -363,24 +370,30 @@ func (v *Verifier) verifyOne(r *http.Request, sigInputs *httpsfv.Dictionary, age
 	case nonce == "" && v.opts.RequireNonce:
 		return nil, invalid(label, ErrNonceRequired)
 	case nonce != "" && v.opts.NonceStore != nil:
-		fresh, err := v.opts.NonceStore.CheckAndRecord(r.Context(), nonce, d.Expires.Add(v.opts.ClockSkew))
+		scope := "keyid:" + keyID
+		if identifier != nil {
+			scope = identifier.String()
+		}
+		fresh, err := v.opts.NonceStore.CheckAndRecord(r.Context(), scope, nonce, d.Expires.Add(v.opts.ClockSkew))
 		if err != nil {
 			return nil, unverified(label, fmt.Errorf("%w: %w", ErrNonceStore, err))
 		}
 		if !fresh {
 			return nil, invalid(label, ErrReplay)
 		}
+		nonceChecked = true
 	}
 
 	return &Result{
-		Outcome:    OutcomeVerified,
-		Label:      label,
-		KeyID:      keyID,
-		Identifier: identifier,
-		Key:        key.JWK,
-		Created:    *d.Created,
-		Expires:    *d.Expires,
-		Nonce:      nonce,
+		Outcome:      OutcomeVerified,
+		Label:        label,
+		KeyID:        keyID,
+		Identifier:   identifier,
+		Key:          key.JWK,
+		Created:      *d.Created,
+		Expires:      *d.Expires,
+		Nonce:        nonce,
+		NonceChecked: nonceChecked,
 	}, nil
 }
 

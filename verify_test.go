@@ -183,7 +183,7 @@ func signCustom(t *testing.T, r *http.Request, key crypto.Signer, label string, 
 
 type failingNonceStore struct{}
 
-func (failingNonceStore) CheckAndRecord(context.Context, string, time.Time) (bool, error) {
+func (failingNonceStore) CheckAndRecord(context.Context, string, string, time.Time) (bool, error) {
 	return false, errors.New("database on fire")
 }
 
@@ -723,4 +723,69 @@ func ed25519Public() (Key, error) {
 		return Key{}, err
 	}
 	return NewKey(k)
+}
+
+// One agent flooding the nonce store must not make another agent's requests
+// unverifiable or replayable, and nonces are only compared within an agent.
+func TestVerifyNonceScopes(t *testing.T) {
+	t.Parallel()
+
+	honestKey, flooderKey := mustGenerate(t, "ed25519"), mustGenerate(t, "ed25519")
+	const flooderOrigin = "https://flooder.test"
+	store := NewMemoryNonceStore(16)
+
+	v, err := NewVerifier(VerifierOptions{
+		Resolver: mapResolver{dirs: map[string]*Directory{
+			testAgentIdentifier:           directoryOf(t, honestKey.Public()),
+			flooderOrigin + WellKnownPath: directoryOf(t, flooderKey.Public()),
+		}},
+		NonceStore: store,
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+
+	signed := func(t *testing.T, key crypto.Signer, origin string) *http.Request {
+		t.Helper()
+		s, err := NewSigner(key, SignerOptions{AgentOrigin: origin})
+		if err != nil {
+			t.Fatalf("NewSigner: %v", err)
+		}
+		r := httptest.NewRequest(http.MethodGet, "https://example.com/", nil)
+		if err := s.Sign(r); err != nil {
+			t.Fatalf("Sign: %v", err)
+		}
+		return r
+	}
+
+	honest := signed(t, honestKey, testAgentOrigin)
+	res, err := v.Verify(honest)
+	if err != nil {
+		t.Fatalf("honest Verify: %v", err)
+	}
+	if !res.NonceChecked {
+		t.Error("NonceChecked is false after a nonce store check")
+	}
+
+	for range 100 {
+		if _, err := v.Verify(signed(t, flooderKey, flooderOrigin)); err != nil {
+			t.Fatalf("flooder Verify: %v", err)
+		}
+	}
+
+	if _, err := v.Verify(signed(t, honestKey, testAgentOrigin)); err != nil {
+		t.Errorf("honest agent unverifiable after a flood: %v", err)
+	}
+	if _, err := v.Verify(honest); !errors.Is(err, ErrReplay) {
+		t.Errorf("honest replay after a flood: want %v, got %v", ErrReplay, err)
+	}
+
+	// The same nonce under another agent is not a replay.
+	scoped := NewMemoryNonceStore(0)
+	for _, scope := range []string{testAgentIdentifier, flooderOrigin + WellKnownPath} {
+		fresh, err := scoped.CheckAndRecord(context.Background(), scope, "same-nonce", time.Now().Add(time.Hour))
+		if err != nil || !fresh {
+			t.Errorf("%s: want fresh, got %v, %v", scope, fresh, err)
+		}
+	}
 }

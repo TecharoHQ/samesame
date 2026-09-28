@@ -1,0 +1,8 @@
+# Never send private keys to the build context.
+var/
+*.pem
+*.key
+
+# .git stays in the context: go build stamps the version from it.
+node_modules/
+docs/

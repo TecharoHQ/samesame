@@ -1,5 +1,5 @@
 # Run Go formatting and linting
-$HOME/go/bin/goimports -w .
+go tool goimports -w .
 go fmt ./...
 go vet ./...
 

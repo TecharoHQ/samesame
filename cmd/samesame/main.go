@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"strings"
 
@@ -31,6 +32,7 @@ func newApp(stdout, stderr io.Writer) *cli.Command {
 	return &cli.Command{
 		Name:      "samesame",
 		Usage:     "generate and inspect Web Bot Auth signing keys",
+		Version:   version(),
 		Writer:    stdout,
 		ErrWriter: stderr,
 		Commands: []*cli.Command{
@@ -353,4 +355,23 @@ func writePrivate(path string, data []byte, force bool) error {
 		return err
 	}
 	return f.Close()
+}
+
+// version reports the version the Go toolchain stamped into the binary: the
+// module version for `go install ...@version`, or one derived from git for
+// builds in a checkout.
+func version() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "unknown"
+	}
+	if v := info.Main.Version; v != "" && v != "(devel)" {
+		return v
+	}
+	for _, s := range info.Settings {
+		if s.Key == "vcs.revision" {
+			return s.Value
+		}
+	}
+	return "(devel)"
 }

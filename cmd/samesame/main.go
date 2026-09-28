@@ -37,6 +37,7 @@ func newApp(stdout, stderr io.Writer) *cli.Command {
 			keygenCommand(),
 			directoryCommand(),
 			keyIDCommand(),
+			serveCommand(),
 		},
 	}
 }

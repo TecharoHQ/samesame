@@ -161,6 +161,26 @@ be static headers. Keep these points in mind:
 - In nginx, an `add_header` in the `location` block replaces the
   `add_header` directives that the `server` block would give it.
 
+### Serving a folder of keys
+
+`samesame serve` serves the directory for every `.pem` private key in a
+folder. It watches the folder, so you can add or delete a key file to
+rotate keys without a restart:
+
+```sh
+samesame serve --keys ./var --authority bot.example --bind :8080
+```
+
+- Responses carry directory signatures for each `--authority`. Other hosts
+  get 421. Repeat `--authority` for each host verifiers use.
+- If a `.pem` file does not parse, for example while it is being written,
+  the previous keys stay served until the next good reload.
+- With no keys in the folder, it answers 503.
+- It also reloads every `--poll` (default one minute), in case a change
+  event is missed.
+- `--keys`, `--authority`, and `--bind` can also be set with
+  `SAMESAME_KEYS`, `SAMESAME_AUTHORITY`, and `SAMESAME_BIND`.
+
 In Go, the same operations are `GenerateKey`, `MarshalPrivateKeyPEM`,
 `ParsePrivateKeyPEM`, `PublicJWK`, `MarshalDirectory`, and
 `SignStaticDirectory`.

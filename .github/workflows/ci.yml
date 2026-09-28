@@ -12,7 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go-version: ["oldstable", "stable"]
+        # go.mod requires Go 1.27, which oldstable cannot build.
+        go-version: ['stable']
 
     steps:
       - name: Checkout
@@ -44,7 +45,7 @@ jobs:
         run: go test -race -coverprofile=coverage.out -v ./...
 
       - name: Upload coverage to Codecov
-        if: matrix.go-version == 'latest'
+        if: matrix.go-version == 'stable'
         uses: codecov/codecov-action@v4
         with:
           file: ./coverage.out
@@ -62,10 +63,10 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "stable"
+          go-version: 'stable'
 
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: "latest"
+          version: 'latest'
           args: --timeout=5m

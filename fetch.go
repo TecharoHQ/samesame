@@ -97,14 +97,53 @@ type FetcherOptions struct {
 	// TLSConfig is used for fetches, for example to trust a test CA.
 	TLSConfig *tls.Config
 
-	// VerifyDirectorySignatures keeps only keys that carry a valid directory
-	// response signature (protocol draft Appendix B.1). The draft lets
-	// verifiers use directly resolved keys without this proof, so it is off
-	// by default.
+	// DirectorySignatures decides what to do with directory response
+	// signatures (protocol draft Appendix B.1). Defaults to
+	// DirectorySignaturesPrefer.
+	DirectorySignatures DirectorySignaturePolicy
+
+	// Deprecated: set DirectorySignatures to DirectorySignaturesRequire.
+	// When true, it overrides DirectorySignatures.
 	VerifyDirectorySignatures bool
 
 	// Now returns the current time. Defaults to time.Now.
 	Now func() time.Time
+}
+
+// DirectorySignaturePolicy decides which directory keys need a valid
+// directory response signature (protocol draft Appendix B.1). A key that
+// needs one and lacks it is moved to Directory.Invalid with
+// ErrDirectoryUnbound.
+type DirectorySignaturePolicy int
+
+const (
+	// DirectorySignaturesPrefer accepts an unsigned directory, because the
+	// draft only recommends signing and lets verifiers use directly
+	// resolved keys without proof. A directory with any
+	// http-message-signatures-directory signature is held to its claim:
+	// every key must then carry a valid signature, and Content-Digest must
+	// match the body.
+	DirectorySignaturesPrefer DirectorySignaturePolicy = iota
+
+	// DirectorySignaturesRequire keeps only keys with a valid signature.
+	// Keys from unsigned directories are dropped.
+	DirectorySignaturesRequire
+
+	// DirectorySignaturesIgnore does not check signatures.
+	DirectorySignaturesIgnore
+)
+
+func (p DirectorySignaturePolicy) String() string {
+	switch p {
+	case DirectorySignaturesPrefer:
+		return "prefer"
+	case DirectorySignaturesRequire:
+		return "require"
+	case DirectorySignaturesIgnore:
+		return "ignore"
+	default:
+		return "DirectorySignaturePolicy(" + strconv.Itoa(int(p)) + ")"
+	}
 }
 
 // Fetcher resolves Signature-Agent identifiers to key directories over
@@ -162,6 +201,9 @@ func NewFetcher(opts FetcherOptions) *Fetcher {
 	}
 	if opts.Now == nil {
 		opts.Now = time.Now
+	}
+	if opts.VerifyDirectorySignatures {
+		opts.DirectorySignatures = DirectorySignaturesRequire
 	}
 
 	dialer := &net.Dialer{Timeout: opts.Timeout}
@@ -409,7 +451,14 @@ func (f *Fetcher) fetch(ctx context.Context, identifier *url.URL, etag, lastModi
 		return result, fmt.Errorf("%s: %w", identifier, err)
 	}
 
-	if f.opts.VerifyDirectorySignatures {
+	switch f.opts.DirectorySignatures {
+	case DirectorySignaturesIgnore:
+	case DirectorySignaturesPrefer:
+		if isSignedDirectory(resp) {
+			f.dropUnboundKeys(dir, resp, req, body)
+		}
+	default:
+		// Unknown policies fail closed.
 		f.dropUnboundKeys(dir, resp, req, body)
 	}
 
@@ -418,6 +467,14 @@ func (f *Fetcher) fetch(ctx context.Context, identifier *url.URL, etag, lastModi
 	result.lastModified = resp.Header.Get("Last-Modified")
 	result.ttl = f.ttl(resp.Header)
 	return result, nil
+}
+
+// isSignedDirectory reports whether resp claims to carry directory response
+// signatures. Signature headers that fail to parse count as a claim, so a
+// mangled signature is rejected rather than ignored.
+func isSignedDirectory(resp *http.Response) bool {
+	all, err := httpsign.ResponseDetailsListByTag(resp, TagDirectory)
+	return err != nil || len(all) != 0
 }
 
 // dropUnboundKeys removes keys without a valid directory response signature

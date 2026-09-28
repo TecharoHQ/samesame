@@ -30,9 +30,9 @@ func TestEndToEnd(t *testing.T) {
 	pool.AddCert(dirSrv.srv.Certificate())
 	verifier, err := NewVerifier(VerifierOptions{
 		Resolver: NewFetcher(FetcherOptions{
-			TLSConfig:                 &tls.Config{RootCAs: pool},
-			AllowPrivateAddresses:     true,
-			VerifyDirectorySignatures: true,
+			TLSConfig:             &tls.Config{RootCAs: pool},
+			AllowPrivateAddresses: true,
+			DirectorySignatures:   DirectorySignaturesRequire,
 		}),
 		NonceStore: NewMemoryNonceStore(0),
 	})

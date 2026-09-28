@@ -408,7 +408,7 @@ func TestFetcherVerifyDirectorySignatures(t *testing.T) {
 			t.Parallel()
 
 			srv := newTestDirectoryServer(t, tt.handler)
-			f := fetcherFor(t, srv, FetcherOptions{VerifyDirectorySignatures: true}, nil)
+			f := fetcherFor(t, srv, FetcherOptions{DirectorySignatures: DirectorySignaturesRequire}, nil)
 
 			dir, err := f.Resolve(context.Background(), srv.identifier(t))
 			if err != nil {
@@ -422,6 +422,74 @@ func TestFetcherVerifyDirectorySignatures(t *testing.T) {
 			}
 			if tt.wantKeys == 1 && dir.Keys[0].ID != keyID {
 				t.Errorf("wrong key %s", dir.Keys[0].ID)
+			}
+		})
+	}
+}
+
+func TestFetcherDirectorySignaturePolicy(t *testing.T) {
+	t.Parallel()
+
+	key := mustGenerate(t, "ed25519")
+	good := mustDirectoryHandler(t, key)
+	unsigned := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec := httptest.NewRecorder()
+		good.ServeHTTP(rec, r)
+		maps.Copy(w.Header(), rec.Header())
+		w.Header().Del("Signature")
+		w.Header().Del("Signature-Input")
+		_, _ = w.Write(rec.Body.Bytes())
+	})
+	forged := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec := httptest.NewRecorder()
+		good.ServeHTTP(rec, r)
+		other := httptest.NewRecorder()
+		mustDirectoryHandler(t, mustGenerate(t, "ed25519")).ServeHTTP(other, r)
+		maps.Copy(w.Header(), rec.Header())
+		w.Header()["Signature"] = other.Header()["Signature"]
+		_, _ = w.Write(rec.Body.Bytes())
+	})
+	// Signed, but the body no longer matches Content-Digest.
+	tampered := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec := httptest.NewRecorder()
+		good.ServeHTTP(rec, r)
+		maps.Copy(w.Header(), rec.Header())
+		w.Header().Del("Content-Length")
+		_, _ = w.Write(append(rec.Body.Bytes(), ' '))
+	})
+
+	for _, tt := range []struct {
+		name     string
+		opts     FetcherOptions
+		handler  http.Handler
+		wantKeys int
+	}{
+		{name: "prefer/signed", handler: good, wantKeys: 1},
+		{name: "prefer/unsigned", handler: unsigned, wantKeys: 1},
+		{name: "prefer/forged", handler: forged},
+		{name: "prefer/tampered", handler: tampered},
+		{name: "require/signed", opts: FetcherOptions{DirectorySignatures: DirectorySignaturesRequire}, handler: good, wantKeys: 1},
+		{name: "require/unsigned", opts: FetcherOptions{DirectorySignatures: DirectorySignaturesRequire}, handler: unsigned},
+		{name: "require/forged", opts: FetcherOptions{DirectorySignatures: DirectorySignaturesRequire}, handler: forged},
+		{name: "deprecated bool requires", opts: FetcherOptions{DirectorySignatures: DirectorySignaturesRequire}, handler: unsigned},
+		{name: "ignore/unsigned", opts: FetcherOptions{DirectorySignatures: DirectorySignaturesIgnore}, handler: unsigned, wantKeys: 1},
+		{name: "ignore/forged", opts: FetcherOptions{DirectorySignatures: DirectorySignaturesIgnore}, handler: forged, wantKeys: 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := newTestDirectoryServer(t, tt.handler)
+			f := fetcherFor(t, srv, tt.opts, nil)
+
+			dir, err := f.Resolve(context.Background(), srv.identifier(t))
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			if len(dir.Keys) != tt.wantKeys {
+				t.Fatalf("want %d keys, got %d: %v", tt.wantKeys, len(dir.Keys), dir.Invalid)
+			}
+			if tt.wantKeys == 0 && !errors.Is(errors.Join(dir.Invalid...), ErrDirectoryUnbound) {
+				t.Errorf("dropped key not reported as unbound: %v", dir.Invalid)
 			}
 		})
 	}
@@ -705,7 +773,7 @@ func TestFetcherDirectorySignatureExpiryUsesClock(t *testing.T) {
 			n := time.Now().Add(tt.offset)
 			now.Store(&n)
 
-			f := fetcherFor(t, srv, FetcherOptions{VerifyDirectorySignatures: true}, &now)
+			f := fetcherFor(t, srv, FetcherOptions{DirectorySignatures: DirectorySignaturesRequire}, &now)
 			dir, err := f.Resolve(context.Background(), srv.identifier(t))
 			if err != nil {
 				t.Fatalf("Resolve: %v", err)
@@ -730,7 +798,7 @@ func TestFetcherLargeSignedDirectory(t *testing.T) {
 	wg.Wait()
 
 	srv := newTestDirectoryServer(t, mustDirectoryHandler(t, keys...))
-	f := fetcherFor(t, srv, FetcherOptions{VerifyDirectorySignatures: true}, nil)
+	f := fetcherFor(t, srv, FetcherOptions{DirectorySignatures: DirectorySignaturesRequire}, nil)
 
 	dir, err := f.Resolve(context.Background(), srv.identifier(t))
 	if err != nil {

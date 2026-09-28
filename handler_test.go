@@ -266,7 +266,7 @@ func TestSignStaticDirectory(t *testing.T) {
 		{name: "another authority", srv: other, wantKeys: 0},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			f := fetcherFor(t, tt.srv, FetcherOptions{VerifyDirectorySignatures: true}, nil)
+			f := fetcherFor(t, tt.srv, FetcherOptions{DirectorySignatures: DirectorySignaturesRequire}, nil)
 			dir, err := f.Resolve(context.Background(), tt.srv.identifier(t))
 			if err != nil {
 				t.Fatalf("Resolve: %v", err)

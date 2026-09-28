@@ -24,8 +24,8 @@ Decisions:
   Members with `jwks_uri`, `cimd` or an unknown type are ignored, which 5.2.1 permits.
 - **Legacy bare-string `Signature-Agent`:** the verifier accepts it (5.2.1 MAY). The
   signer never sends it.
-- **Directory response signatures:** the handler always emits them. Verifying them is
-  opt-in, because 5.5 / App B let a verifier use directly resolved keys without proof.
+- **Directory response signatures:** the handler always emits them. The fetcher defaults
+  to `prefer`: unsigned directories are accepted (App B.1 MAY), signed ones must verify.
 
 ## Identity model (Sec 4, 5.4, 6.10)
 

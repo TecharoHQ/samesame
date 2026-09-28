@@ -578,3 +578,140 @@ func TestCheckPublicAddress(t *testing.T) {
 		})
 	}
 }
+
+func TestFetcherCallerCancellation(t *testing.T) {
+	t.Parallel()
+
+	good := mustDirectoryHandler(t, mustGenerate(t, "ed25519"))
+	release := make(chan struct{})
+	srv := newTestDirectoryServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+		good.ServeHTTP(w, r)
+	}))
+	f := fetcherFor(t, srv, FetcherOptions{}, nil)
+	id := srv.identifier(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	if _, err := f.Resolve(ctx, id); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("want %v, got %v", context.DeadlineExceeded, err)
+	}
+	if waited := time.Since(start); waited > time.Second {
+		t.Errorf("cancelled caller waited %s for the fetch", waited)
+	}
+
+	// The shared fetch keeps going and fills the cache.
+	close(release)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		dir, err := f.Resolve(context.Background(), id)
+		if err == nil && len(dir.Keys) == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("background fetch never completed: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := srv.hits.Load(); got != 1 {
+		t.Errorf("want 1 fetch, got %d", got)
+	}
+}
+
+func TestFetcherConcurrencyLimit(t *testing.T) {
+	t.Parallel()
+
+	good := mustDirectoryHandler(t, mustGenerate(t, "ed25519"))
+	release := make(chan struct{})
+	slow := newTestDirectoryServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+		good.ServeHTTP(w, r)
+	}))
+	fast := newTestDirectoryServer(t, good)
+	defer close(release)
+
+	pool := x509.NewCertPool()
+	pool.AddCert(slow.srv.Certificate())
+	pool.AddCert(fast.srv.Certificate())
+	f := NewFetcher(FetcherOptions{
+		TLSConfig:             &tls.Config{RootCAs: pool},
+		AllowPrivateAddresses: true,
+		MaxConcurrentFetches:  1,
+	})
+
+	go f.Resolve(context.Background(), slow.identifier(t))
+	for slow.hits.Load() == 0 {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// The only slot is taken, so another origin's fetch must wait.
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := f.Resolve(ctx, fast.identifier(t)); err == nil {
+		t.Fatal("fetch ran while the only slot was taken")
+	}
+	if got := fast.hits.Load(); got != 0 {
+		t.Errorf("want 0 fetches of the second origin, got %d", got)
+	}
+}
+
+// Directory signature expiry must use the Fetcher's clock, not the wall
+// clock.
+func TestFetcherDirectorySignatureExpiryUsesClock(t *testing.T) {
+	t.Parallel()
+
+	key := mustGenerate(t, "ed25519")
+	srv := newTestDirectoryServer(t, mustDirectoryHandler(t, key))
+
+	for _, tt := range []struct {
+		name     string
+		offset   time.Duration
+		wantKeys int
+	}{
+		{name: "now", offset: 0, wantKeys: 1},
+		{name: "after the signatures expire", offset: DefaultDirectorySignatureLifetime + time.Hour, wantKeys: 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var now atomic.Pointer[time.Time]
+			n := time.Now().Add(tt.offset)
+			now.Store(&n)
+
+			f := fetcherFor(t, srv, FetcherOptions{VerifyDirectorySignatures: true}, &now)
+			dir, err := f.Resolve(context.Background(), srv.identifier(t))
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			if len(dir.Keys) != tt.wantKeys {
+				t.Errorf("want %d keys, got %d: %v", tt.wantKeys, len(dir.Keys), dir.Invalid)
+			}
+		})
+	}
+}
+
+// A directory at the default key limit, all RSA, has more than 16 KiB of
+// signature headers.
+func TestFetcherLargeSignedDirectory(t *testing.T) {
+	t.Parallel()
+
+	keys := make([]crypto.Signer, DefaultMaxKeys)
+	var wg sync.WaitGroup
+	for i := range keys {
+		wg.Go(func() { keys[i] = mustGenerate(t, "rsa") })
+	}
+	wg.Wait()
+
+	srv := newTestDirectoryServer(t, mustDirectoryHandler(t, keys...))
+	f := fetcherFor(t, srv, FetcherOptions{VerifyDirectorySignatures: true}, nil)
+
+	dir, err := f.Resolve(context.Background(), srv.identifier(t))
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if len(dir.Keys) != len(keys) {
+		t.Errorf("want %d keys, got %d: %v", len(keys), len(dir.Keys), dir.Invalid)
+	}
+}

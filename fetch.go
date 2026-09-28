@@ -20,21 +20,20 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/lestrrat-go/jwx/v4/jwk"
 	"github.com/yaronf/httpsign"
 	"golang.org/x/sync/singleflight"
 )
 
 // Fetcher defaults.
 const (
-	DefaultFetchTimeout      = 5 * time.Second
-	DefaultMaxDirectorySize  = 64 << 10
-	DefaultMinTTL            = time.Minute
-	DefaultMaxTTL            = 24 * time.Hour
-	DefaultTTL               = time.Hour
-	DefaultNegativeTTL       = 30 * time.Second
-	DefaultMaxCacheEntries   = 10_000
-	DefaultMaxFetchPerOrigin = 2
+	DefaultFetchTimeout         = 5 * time.Second
+	DefaultMaxDirectorySize     = 64 << 10
+	DefaultMinTTL               = time.Minute
+	DefaultMaxTTL               = 24 * time.Hour
+	DefaultTTL                  = time.Hour
+	DefaultNegativeTTL          = 30 * time.Second
+	DefaultMaxCacheEntries      = 10_000
+	DefaultMaxConcurrentFetches = 64
 
 	// MaxNegativeTTL bounds how long a failed fetch is remembered (protocol
 	// draft Appendix C.5).
@@ -76,9 +75,16 @@ type FetcherOptions struct {
 	// DefaultMaxCacheEntries.
 	MaxCacheEntries int
 
-	// MaxFetchesPerOrigin caps concurrent fetches to one origin (protocol
-	// draft Appendix C.3). Defaults to DefaultMaxFetchPerOrigin.
-	MaxFetchesPerOrigin int
+	// MaxConcurrentFetches caps fetches in flight across all origins.
+	// Fetches of the same identifier are coalesced, and a directory
+	// identifier is one per origin, so each origin already has at most one
+	// fetch in flight (protocol draft Appendix C.3). Defaults to
+	// DefaultMaxConcurrentFetches.
+	MaxConcurrentFetches int
+
+	// ClockSkew is the tolerance for directory response signature times.
+	// Defaults to DefaultClockSkew.
+	ClockSkew time.Duration
 
 	// AllowedHosts, when set, is the only set of hosts (as in URL.Host)
 	// that may be fetched.
@@ -108,9 +114,9 @@ type Fetcher struct {
 	client *http.Client
 	group  singleflight.Group
 
-	mu      sync.Mutex
-	cache   map[string]*cacheEntry
-	origins map[string]chan struct{}
+	mu    sync.Mutex
+	cache map[string]*cacheEntry
+	slots chan struct{}
 }
 
 type cacheEntry struct {
@@ -148,8 +154,11 @@ func NewFetcher(opts FetcherOptions) *Fetcher {
 	if opts.MaxCacheEntries <= 0 {
 		opts.MaxCacheEntries = DefaultMaxCacheEntries
 	}
-	if opts.MaxFetchesPerOrigin <= 0 {
-		opts.MaxFetchesPerOrigin = DefaultMaxFetchPerOrigin
+	if opts.MaxConcurrentFetches <= 0 {
+		opts.MaxConcurrentFetches = DefaultMaxConcurrentFetches
+	}
+	if opts.ClockSkew <= 0 {
+		opts.ClockSkew = DefaultClockSkew
 	}
 	if opts.Now == nil {
 		opts.Now = time.Now
@@ -167,12 +176,14 @@ func NewFetcher(opts FetcherOptions) *Fetcher {
 	transport := &http.Transport{
 		// No proxy: the dialer would then check the proxy's address, not
 		// the directory's.
-		Proxy:                  nil,
-		DialContext:            dialer.DialContext,
-		TLSClientConfig:        opts.TLSConfig,
-		TLSHandshakeTimeout:    opts.Timeout,
-		ResponseHeaderTimeout:  opts.Timeout,
-		MaxResponseHeaderBytes: 16 << 10,
+		Proxy:                 nil,
+		DialContext:           dialer.DialContext,
+		TLSClientConfig:       opts.TLSConfig,
+		TLSHandshakeTimeout:   opts.Timeout,
+		ResponseHeaderTimeout: opts.Timeout,
+		// Signed directories carry one Signature and Signature-Input
+		// per key, which for many RSA keys exceeds 16 KiB.
+		MaxResponseHeaderBytes: 64 << 10,
 		ForceAttemptHTTP2:      true,
 		IdleConnTimeout:        90 * time.Second,
 	}
@@ -187,8 +198,8 @@ func NewFetcher(opts FetcherOptions) *Fetcher {
 				return http.ErrUseLastResponse
 			},
 		},
-		cache:   make(map[string]*cacheEntry),
-		origins: make(map[string]chan struct{}),
+		cache: make(map[string]*cacheEntry),
+		slots: make(chan struct{}, opts.MaxConcurrentFetches),
 	}
 }
 
@@ -226,13 +237,19 @@ func (f *Fetcher) Resolve(ctx context.Context, identifier *url.URL) (*Directory,
 
 	// Detach from the caller's cancellation: other callers may be waiting
 	// on this fetch. f.opts.Timeout still bounds it.
-	v, err, _ := f.group.Do(key, func() (any, error) {
+	ch := f.group.DoChan(key, func() (any, error) {
 		return f.refresh(context.WithoutCancel(ctx), identifier)
 	})
-	if err != nil {
-		return nil, err
+	select {
+	case res := <-ch:
+		if res.Err != nil {
+			return nil, res.Err
+		}
+		return res.Val.(*Directory), nil
+	case <-ctx.Done():
+		// The fetch keeps running for other callers and fills the cache.
+		return nil, fmt.Errorf("%w: %w", ErrFetchFailed, ctx.Err())
 	}
-	return v.(*Directory), nil
 }
 
 // refresh fetches identifier and updates the cache. It returns the cached
@@ -330,7 +347,7 @@ type fetchResult struct {
 func (f *Fetcher) fetch(ctx context.Context, identifier *url.URL, etag, lastModified string) (fetchResult, error) {
 	var result fetchResult
 
-	release, err := f.acquire(ctx, identifier.Host)
+	release, err := f.acquire(ctx)
 	if err != nil {
 		return result, fmt.Errorf("%w: %w", ErrFetchFailed, err)
 	}
@@ -431,7 +448,7 @@ func (f *Fetcher) dropUnboundKeys(dir *Directory, resp *http.Response, req *http
 
 	var bound []Key
 	for _, k := range dir.Keys {
-		if err := verifyBinding(k, all, resp, req, *fields, now); err != nil {
+		if err := verifyBinding(k, all, resp, req, *fields, now, f.opts.ClockSkew); err != nil {
 			dir.Invalid = append(dir.Invalid, fmt.Errorf("%w: %s: %w", ErrDirectoryUnbound, k.ID, err))
 			continue
 		}
@@ -440,14 +457,14 @@ func (f *Fetcher) dropUnboundKeys(dir *Directory, resp *http.Response, req *http
 	dir.Keys = bound
 }
 
-func verifyBinding(k Key, all []*httpsign.MessageDetails, resp *http.Response, req *http.Request, fields httpsign.Fields, now time.Time) error {
-	raw, err := jwk.Export[any](k.JWK)
-	if err != nil {
-		return err
-	}
-	newV, _, err := verifierFunc(raw)
-	if err != nil {
-		return err
+func verifyBinding(k Key, all []*httpsign.MessageDetails, resp *http.Response, req *http.Request, fields httpsign.Fields, now time.Time, skew time.Duration) error {
+	newV := k.newVerifier
+	if newV == nil {
+		built, err := NewKey(k.JWK)
+		if err != nil {
+			return err
+		}
+		newV = built.newVerifier
 	}
 
 	lastErr := errors.New("no signature with this keyid")
@@ -459,7 +476,11 @@ func verifyBinding(k Key, all []*httpsign.MessageDetails, resp *http.Response, r
 			lastErr = errors.New("created and expires are required")
 			continue
 		}
-		if d.Created.After(now.Add(DefaultClockSkew)) {
+		if !d.Expires.After(now.Add(-skew)) {
+			lastErr = errors.New("signature expired")
+			continue
+		}
+		if d.Created.After(now.Add(skew)) {
 			// Appendix B.1: MUST reject a future created.
 			lastErr = errors.New("created is in the future")
 			continue
@@ -467,7 +488,7 @@ func verifyBinding(k Key, all []*httpsign.MessageDetails, resp *http.Response, r
 
 		cfg := httpsign.NewVerifyConfig().
 			SetVerifyCreated(false).
-			SetRejectExpired(true).
+			SetRejectExpired(false). // checked above against f.opts.Now
 			SetAllowedTags([]string{TagDirectory}).
 			SetKeyID(k.ID)
 		v, err := newV(cfg, fields)
@@ -517,19 +538,11 @@ func (f *Fetcher) ttl(h http.Header) time.Duration {
 	return min(max(ttl, f.opts.MinTTL), f.opts.MaxTTL)
 }
 
-// acquire takes a per-origin fetch slot.
-func (f *Fetcher) acquire(ctx context.Context, host string) (func(), error) {
-	f.mu.Lock()
-	sem, ok := f.origins[host]
-	if !ok {
-		sem = make(chan struct{}, f.opts.MaxFetchesPerOrigin)
-		f.origins[host] = sem
-	}
-	f.mu.Unlock()
-
+// acquire takes one of the MaxConcurrentFetches fetch slots.
+func (f *Fetcher) acquire(ctx context.Context) (func(), error) {
 	select {
-	case sem <- struct{}{}:
-		return func() { <-sem }, nil
+	case f.slots <- struct{}{}:
+		return func() { <-f.slots }, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}

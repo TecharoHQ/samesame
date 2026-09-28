@@ -2,107 +2,115 @@
 
 ## Context
 
-`samesame` is meant to be the Web Bot Auth implementation for Anubis. Right now it has
-no implementation: `samesame.go` is just `package samesame` and `samesame_test.go` has
-one empty test. The only content is the specs in `docs/RFC/`:
+`samesame` is meant to be the Web Bot Auth implementation for Anubis. The repo had no
+implementation. The specs are in `docs/RFC/`:
 
-- `rfc9421.txt`: HTTP Message Signatures
-- `draft-meunier-web-bot-auth-architecture-04.txt`: web-bot-auth profile (tag, keyid, nonce, status codes)
-- `draft-meunier-http-message-signatures-directory-04.txt`: key directory, `Signature-Agent`, well-known URI
-- `draft-meunier-webbotauth-registry-01.txt`: Signature Agent Card metadata (out of scope, see below)
+- `draft-ietf-webbotauth-httpsig-protocol-00.txt` (2026-09-01): the working group
+  document. It replaces the old architecture and directory drafts and defines the
+  web-bot-auth profile, `Signature-Agent`, the key directory and the well-known URI.
+  All section numbers below refer to it.
+- `rfc9421.txt`: HTTP Message Signatures.
+- `draft-meunier-webbotauth-registry-03.txt`: Signature Agent Card (out of scope).
 
-Anubis (`../anubis`) does not reference web bot auth yet. Decisions made with the user:
+Decisions:
 
-- **Scope:** full stack. That means a verifier (for Anubis), a signer (for bot operators and
-  for end-to-end tests), and a directory server handler.
-- **Core:** wrap an existing RFC 9421 library instead of hand-rolling one.
-- **Go version:** requiring Go 1.27 is OK.
+- **Scope:** full stack. That means a verifier (for Anubis), a signer, and a directory
+  server handler.
+- **Core:** wrap `github.com/yaronf/httpsign` (Go 1.27, `httpsfv`, `jwx/v4`). Step 0
+  confirmed that it supports pre-verification details (`RequestDetailsListByTag`),
+  dictionary member components (`AddDictHeader`), the `;req` flag
+  (`AddRequestComponent`) and tag allow-lists.
+- **`Signature-Agent` types:** v1 supports only `type=directory`, which is the default.
+  Members with `jwks_uri`, `cimd` or an unknown type are ignored, which 5.2.1 permits.
+- **Legacy bare-string `Signature-Agent`:** the verifier accepts it (5.2.1 MAY). The
+  signer never sends it.
+- **Directory response signatures:** the handler always emits them. Verifying them is
+  opt-in, because 5.5 / App B let a verifier use directly resolved keys without proof.
 
-**Library choice: `github.com/yaronf/httpsign`.** Its go.mod requires Go 1.27 and pulls in
-`dunglas/httpsfv` and `lestrrat-go/jwx/v4`. According to its docs, it covers every hard
-part of this work:
+## Identity model (Sec 4, 5.4, 6.10)
 
-- `RequestDetailsByTag(req, "web-bot-auth")` returns keyid, alg, created, expires, nonce and
-  tag before any crypto runs. The verifier needs this to pick a key and fetch a directory.
-- `WithAssociatedRequest` / `WithResponse` handle the `;req` flag. The directory response
-  signature needs this (`"@authority";req`).
-- `SetNonceValidator`, `SetRejectExpired`, `SetNotOlderThan`, `SetAllowedAlgs` and
-  `SetKeyID` on the verifier. `SetTag`, `SetNonce`, `SetExpires` and `SetKeyID` on the signer.
-- `jwx` provides JWK parsing and the RFC 7638 / RFC 8037 thumbprint for keyids.
+- The identifier is the URL the verifier resolved: for `directory`, that is
+  `origin + /.well-known/http-message-signatures-directory`, normalized per RFC 3986
+  6.2.2 and 6.2.3. It is never the raw member value.
+- Key lookup is keyed on the `(identifier, keyid)` pair (5.4 MUST).
+- A key held out-of-band (static config) yields only a thumbprint identity (4.3). It
+  never attributes the request to a URL (4.4 MUST NOT).
+- There are three outcomes (C.1): `verified`, `invalid`, and `unverified` (discovery
+  failed or key unknown). `unverified` is its own signal, not a 403.
 
-The alternative is `remitly-oss/httpsig-go`, which targets Go 1.22 and already shares
-`golang-jwt` with Anubis. It stays the fallback if step 0 fails.
+## Package layout (one flat package `samesame`)
 
-## Step 0: Check the library against the spec (before writing anything else)
+| File           | Contents                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `samesame.go`  | Constants: `TagWebBotAuth`, `TagDirectory`, `MediaTypeDirectory`, `WellKnownPath`, `HeaderSignatureAgent`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `directory.go` | `ParseDirectory`: parses the JWKS and drops bad keys individually (5.5.1 SHOULD). A key is dropped when it is malformed, contains private material, has `use` other than `sig`, has a `kid` that does not equal the thumbprint (5.5 MUST for the well-known URI), or is a known RFC 9421 test key (6.8 SHOULD, with an opt-out for tests). `nbf`/`exp` are honored at lookup time as local policy, because the spec is silent. Parsing also enforces a max key count (6.7). `Thumbprint(jwk.Key)` returns the RFC 7638 / RFC 8037 thumbprint.                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `agent.go`     | Parses `Signature-Agent`. Dictionary form: String members with a `type` Token param (default `directory`). For `directory` members, the value must be an https origin (path empty or `/`), otherwise the member is ignored. Other types are ignored. Legacy form: if the raw field starts with `"`, it is parsed as one String Item and treated as a single member keyed by the covering signature's label. Returns members with their resolved identifier URL.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `fetch.go`     | `Fetcher` resolves a directory identifier to a `*Directory`. Rules: HTTPS only; no redirects (`CheckRedirect` returns `ErrUseLastResponse`, and 3xx counts as failure); 200 only; media type check; body cap after decoding; timeout; dialer `Control` that blocks loopback, private, link-local and ULA addresses (6.7). Caching follows HTTP semantics: `Cache-Control`, `Expires`, `ETag`/`Last-Modified` with conditional GET (C.4), plus floor/ceiling clamps. A failed fetch MUST NOT evict a cached entry, while a successful fetch replaces it (6.10). Negative cache at most 5 min, exponential backoff with jitter, and `Retry-After` (C.5). singleflight per identifier plus a per-origin concurrency limit (C.3). Optional `VerifyDirectorySignatures`: checks `("@authority";req "content-digest")` with `tag=http-message-signatures-directory`, validates `Content-Digest` against the body, and rejects a future `created` (App B.1). |
+| `verify.go`    | `Verifier.Verify(r) (*Result, error)`. Flow: (1) Run `RequestDetailsListByTag(web-bot-auth)` and verify each signature independently (5.2.2). (2) Require `created`, `expires` and `keyid`, and require `@authority` or `@target-uri` to be covered (5.2). Apply a configurable `MaxValidity` for `expires - created` (C.6 says it is policy; default 24h). (3) Find the covered `signature-agent` component and locate the member through its `;key=` (never by label, 6.6.1). In legacy form, the component is un-keyed. (4) Resolve the key by `(identifier, keyid)` through `Fetcher`, falling back to static keys (thumbprint identity). (5) Verify with httpsign, using an alg allow-list (no HMAC, 6.4), clock skew and the `NonceStore`. (6) Return `Result{Outcome, KeyID, Label, Identifier *url.URL, Key}`. Reject plaintext unless `AllowInsecure` is set (6.1). The scheme comes from config or a trusted proxy header.                  |
+| `nonce.go`     | `NonceStore` with an atomic `CheckAndRecord(ctx, nonce, until) (fresh bool, err error)`, plus an in-memory TTL implementation with bounded size. If the store errors, the replay check fails closed: the result is not verified, and nothing claims the check ran (C.6).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `errors.go`    | Errors classified into outcomes. Status code helpers: parse failure 400 (MAY), invalid 403, replay 429 (MAY). `WriteChallenge(w, err)` sets `Accept-Signature` with the profile params (5.3).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `sign.go`      | `Signer`: built from an Ed25519 key or any `crypto.Signer` / JWK. Sets keyid to the thumbprint, `tag=web-bot-auth`, created, and expires (default 1h, capped at 24h, 5.2 RECOMMENDED). Nonce is on by default: 64 random bytes, base64url. A `Signature-Agent` origin is required (4.3 MUST), with member key and label as separate settings. Covers `@authority` and `"signature-agent";key=<member>`. Provides `Sign(r)` and `Transport(rt)`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `handler.go`   | `DirectoryHandler(keys)`: serves the JWKS (with `kid` = thumbprint) as `MediaTypeDirectory`, with `Cache-Control`, `Content-Digest: sha-256`, and one signature per key over `("@authority";req "content-digest")` with long `expires` (C.8). Supports GET and HEAD.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
-Write throwaway tests in `samesame_test.go` against httpsign:
-
-1. Verify the draft Appendix A.2 Ed25519 vectors (RFC 9421 B.1.4 test key) and the A.1
-   RSA-PSS vectors (B.1.2 key). Check `alg`, `nonce` and `tag` round-trip correctly.
-2. Parse `sig2=("@authority" "signature-agent";key="sig2")`. This is a dictionary member
-   component (`;key=`). Confirm httpsign supports it.
-3. Verify a response signature that covers `"@authority";req`.
-
-If any of these fail, stop and switch to remitly, or report the gap to the user.
-
-## Package layout (one flat package `samesame`, files by concern)
-
-| File           | Contents                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `samesame.go`  | Constants: `TagWebBotAuth = "web-bot-auth"`, `TagDirectory = "http-message-signatures-directory"`, `MediaTypeDirectory = "application/http-message-signatures-directory+json"`, `WellKnownPath = "/.well-known/http-message-signatures-directory"`. Sentinel errors.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `directory.go` | `Directory{Keys []jwk.Key}`: parse and validate (drop keys that are malformed, not `use:sig`, outside `nbf`/`exp`, or whose `kid` differs from the computed thumbprint). `Thumbprint(jwk.Key) (string, error)` returns base64url SHA-256. `KeyByID`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `agent.go`     | Parse `Signature-Agent` as an SF dictionary with httpsfv. Each member must be a String holding an `https`, `http` or `data` URI. Decode `data:` URIs with the directory media type, as plain or base64. Invalid input makes the whole header be ignored (spec: MAY).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `fetch.go`     | `Fetcher`: fetch directories over HTTP with a cache. Honor `Cache-Control: max-age`, with a floor and a ceiling. Check the content type. Verify the per-key response signatures (`tag=http-message-signatures-directory`, `"@authority";req`) and drop keys that have no valid signature. Use singleflight per URL. **SSRF hardening** is required because the URL comes from the attacker: HTTPS only by default, a dialer `Control` hook that rejects loopback, private, link-local and ULA addresses, a response size cap, a timeout, and an optional host allow-list.                                                                                                                                                                                                                                  |
-| `verify.go`    | `Verifier` with `Verify(r *http.Request) (*Result, error)`. Flow: (1) `RequestDetailsListByTag(web-bot-auth)`. (2) Require `created`, `expires` and `keyid`, require `@authority` or `@target-uri` to be covered, and require `expires - created <= MaxValidity` (default 24h). (3) If `Signature-Agent` is present, the signature must cover it (`;key=label`). (4) Resolve keyid from static trusted keys, then from the directory named by `Signature-Agent`. (5) Build an httpsign verifier from the JWK with alg allow-list, clock skew, and the `NonceStore` callback. (6) Return `Result{KeyID, Label, Agent *url.URL, Key, Nonce}`. Reject plaintext requests unless `AllowInsecure` is set (arch 5.1). Take the scheme from config or a trusted proxy header, because Anubis runs behind proxies. |
-| `nonce.go`     | `NonceStore` interface (`Seen(ctx, nonce string, until time.Time) (bool, error)`) plus an in-memory TTL implementation. Anubis can plug in its own store backend later.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `errors.go`    | Typed errors that map to HTTP status codes: parse failure 400, bad or missing signature 403, replayed nonce 429. `WriteChallenge(w, err)` sets `Accept-Signature` with the web-bot-auth params (arch 4.3).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `sign.go`      | `Signer`: built from an Ed25519 key (or any `crypto.Signer` or JWK). Sets keyid to the thumbprint, `tag=web-bot-auth`, created and expires (default 1h, capped at 24h), and a 64-byte base64url random nonce. Covers `@authority`, plus `signature-agent;key=<label>` when an agent URL is configured. `Sign(r *http.Request) error` and `Transport(http.RoundTripper) http.RoundTripper`.                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `handler.go`   | `DirectoryHandler(keys []SigningKey) http.Handler`: serves the JWKS with the right media type and `Cache-Control`. Signs the response once per key with `tag=http-message-signatures-directory` and `"@authority";req`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-
-Out of scope for this pass: `x5c` / AIA delegation (the draft calls it experimental) and
-the Signature Agent Card registry draft. Each can follow as its own change.
+Out of scope: `jwks_uri` and `cimd` member types, delegation and chaining (D.1), the
+registry / Signature Agent Card, and signing multiple signatures that cover each other
+(5.2.2). Verifying multiple independent signatures is in scope.
 
 ## Tests (table-driven, per `xe-go:go-table-driven-tests`)
 
-- `directory_test.go`: the directory draft example key must give thumbprint
-  `NFcWBst6DXG-N35nHdzMrioWntdzNZghQSkjHNMMSjw`. Also cover the `nbf`/`exp` window,
-  mismatched `kid`, and malformed JSON.
-- `agent_test.go`: https, http and data URIs (plain and base64). Reject bad schemes,
-  non-string members and a wrong data media type. Include the data-URI example from
-  directory draft A.4.
-- `verify_test.go`: the architecture draft A.1 and A.2 vectors with a pinned clock.
-  Negative cases: wrong tag, missing expires, expired, validity over 24h, `@authority` not
-  covered, `Signature-Agent` present but not covered, unknown keyid, replayed nonce, plain
-  HTTP.
-- `fetch_test.go`: `httptest.NewTLSServer` serving `DirectoryHandler`. Cover cache hit and
-  miss, max-age handling, dropping keys without a valid signature, the size cap, and
-  loopback being blocked by default (the test turns the block off explicitly).
-- `e2e_test.go`: `Signer.Transport`, then a TLS test server running `DirectoryHandler` and
-  a `Verifier` middleware, then `Result`.
-- `FuzzParseSignatureAgent` and `FuzzVerify`, which must never panic on arbitrary headers.
+- Vectors from Appendix E, all confirmed to verify over their printed bases:
+  - E.1.1: RSA-PSS, dictionary form, label `sig2`, member `agent2`.
+  - E.1.2: RSA-PSS, legacy string form.
+  - E.2.1: Ed25519, dictionary form.
+  - E.2.2: Ed25519, legacy string form.
+  - E.2.3: signed directory response, which is also the directory fixture.
+
+  E.x.1 use `expires=4889289600`, so those tests raise `MaxValidity` and opt out of
+  the test-key denylist.
+
+- `directory_test.go`: the thumbprint of the B.1.4 key is
+  `poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U`. The spec's 5.5.1 example key (wrong
+  `kid` `NFcWBst6...`) must be dropped. Also cover private material, `use:enc`,
+  `nbf`/`exp`, the key-count cap, malformed JSON, and the test-key denylist.
+- `agent_test.go`: an origin member is valid; a member with a path, an http member, a
+  data member, or a non-string member is ignored; `jwks_uri`/`cimd`/unknown types are
+  ignored; the legacy string form is accepted; `/` is accepted as the path.
+- `verify_test.go`: the E vectors, plus negative cases: wrong tag, missing expires,
+  expired, validity over `MaxValidity`, `@authority` not covered, `Signature-Agent`
+  member not covered, member located by label instead of `;key=`, unknown keyid
+  (`unverified`), replayed nonce, nonce store error, plain HTTP, and HMAC alg.
+- `fetch_test.go`: `httptest.NewTLSServer` serving `DirectoryHandler`. Cover cache hit,
+  conditional GET, a failed refresh keeping the cache, a successful refresh without the
+  key evicting it, the negative cache, a redirect being refused, non-200, the size cap,
+  loopback blocked by default, and the optional directory signature check (E.2.3).
+- `e2e_test.go`: `Signer.Transport`, then TLS `DirectoryHandler`, then `Verifier`, then
+  a `verified` result with the correct identifier.
+- `FuzzParseSignatureAgent` and `FuzzVerify`.
 
 ## Repo housekeeping
 
-- `go.mod`: `go 1.27`. Add `yaronf/httpsign`, `lestrrat-go/jwx/v4` and
-  `golang.org/x/sync` (singleflight).
-- `.github/workflows/ci.yml`: remove `oldstable` from the matrix, because Go 1.26 cannot
-  build a 1.27 module. Also fix the codecov condition: it checks `'latest'`, which never
-  matches the matrix, so it should check `'stable'`.
-- `README.md`: short usage for the verifier (Anubis), the signer and the handler.
+- `go.mod`: `go 1.27` (done). Dependencies: `yaronf/httpsign`, `lestrrat-go/jwx/v4`,
+  `dunglas/httpsfv`, `golang.org/x/sync`.
+- `.github/workflows/ci.yml`: drop `oldstable` (Go 1.26 cannot build the module) and fix
+  the codecov condition (`'latest'` should be `'stable'`).
+- `README.md`: usage for the verifier, the signer and the handler.
 
 ## Order of work
 
-0. Library check (above). 1. `samesame.go`, `directory.go`. 2. `agent.go`.
-1. `sign.go`. 4. `nonce.go`, `errors.go`, `verify.go`. 5. `handler.go`, `fetch.go`.
-2. e2e and fuzz tests, README, CI. Use TDD for each step and one conventional commit per step.
+0. Library check (done; E vectors will replace the -04 ones).
+1. `samesame.go`, `directory.go`.
+2. `agent.go`.
+3. `sign.go`.
+4. `nonce.go`, `errors.go`, `verify.go`.
+5. `handler.go`, `fetch.go`.
+6. e2e and fuzz tests, README, CI.
+
+Use TDD and one conventional commit per step.
 
 ## Verification
 
-- `go test -race ./...` and `go vet ./...` pass. Run the fuzz targets briefly
-  (`go test -fuzz=FuzzVerify -fuzztime=30s`).
-- The draft test vectors pass: arch A.1 and A.2, directory A.1 thumbprint, directory A.4
-  data URI.
-- The e2e test proves the whole path: signer, then directory fetch with signature
-  validation, then verification.
-- Optional manual check: point the verifier at Cloudflare's public web-bot-auth test
-  directory to confirm interop with a real deployment.
+- `go test ./...` and `go vet ./...` pass. CI also runs `-race`. Run the fuzz targets
+  briefly.
+- All Appendix E vectors pass.
+- The e2e test covers the full path: sign, discover, verify.
+- Optional: interop check against a public web-bot-auth deployment.

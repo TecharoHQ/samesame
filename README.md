@@ -185,6 +185,46 @@ In Go, the same operations are `GenerateKey`, `MarshalPrivateKeyPEM`,
 `ParsePrivateKeyPEM`, `PublicJWK`, `MarshalDirectory`, and
 `SignStaticDirectory`.
 
+## Docker
+
+The image runs `samesame serve`. It is published to
+`ghcr.io/techarohq/samesame`.
+
+```sh
+docker run -d -p 8080:8080 \
+	--user "$(id -u):$(id -g)" \
+	-v "$PWD/var:/keys:ro" \
+	-e SAMESAME_AUTHORITY=bot.example \
+	ghcr.io/techarohq/samesame:latest
+```
+
+- Mount your folder of `.pem` private keys at `/keys`. The container keeps
+  watching it.
+- For several hosts, give `SAMESAME_AUTHORITY` as a comma-separated list,
+  for example `bot.example,www.bot.example`.
+- The image runs as the non-root user 65532. Private keys usually have mode
+  `0600`, so the container cannot read them unless it runs as their owner.
+  Use `--user` as in the example. In Kubernetes, use `fsGroup` with a
+  Secret `defaultMode` of `0440`. If the container cannot read the keys,
+  it logs `permission denied` and answers 503.
+- `samesame --version` prints the version that the Go toolchain stamped
+  from git.
+
+To build the image:
+
+```sh
+docker buildx bake local                  # samesame:local, for this machine
+VERSION=v1.2.3 docker buildx bake --push  # linux/amd64 and linux/arm64
+```
+
+The Docker workflow runs as follows:
+
+- Each pull request builds the image without pushing it.
+- Each push to `main` or `develop` pushes a branch tag and a `sha-` tag.
+- Each release pushes `vX.Y.Z`, `vX.Y`, and `latest`.
+- `.dockerignore` keeps `var/` and all `*.pem` files out of the build
+  context.
+
 ## Not supported yet
 
 - `jwks_uri` and `cimd` members of `Signature-Agent`. The verifier ignores

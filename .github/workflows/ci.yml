@@ -4,7 +4,7 @@ on:
   push:
     branches: [main, develop]
   pull_request:
-    branches: [main]
+    branches: [main, develop]
 
 jobs:
   test:
@@ -12,7 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go-version: ["oldstable", "stable"]
+        # go.mod requires Go 1.27, which oldstable cannot build.
+        go-version: ['stable']
 
     steps:
       - name: Checkout
@@ -44,7 +45,7 @@ jobs:
         run: go test -race -coverprofile=coverage.out -v ./...
 
       - name: Upload coverage to Codecov
-        if: matrix.go-version == 'latest'
+        if: matrix.go-version == 'stable'
         uses: codecov/codecov-action@v4
         with:
           file: ./coverage.out
@@ -62,10 +63,12 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "stable"
+          go-version: 'stable'
 
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: "latest"
+          # golangci-lint v1 is built with Go 1.24 and refuses Go 1.27
+          # modules. Pinned so local and CI runs agree.
+          version: v2.14.0
           args: --timeout=5m

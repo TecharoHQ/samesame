@@ -1,0 +1,1456 @@
+
+
+
+
+Web Bot Auth                                                M. Guerreiro
+Internet-Draft                                                Cloudflare
+Intended status: Informational                                U. Kirazci
+Expires: 28 December 2026                                         Amazon
+                                                              T. Meunier
+                                                              Cloudflare
+                                                            26 June 2026
+
+
+           Registry and Signature Agent card for Web bot auth
+                  draft-meunier-webbotauth-registry-03
+
+Abstract
+
+   This document defines the "Signature Agent Card", a JSON metadata
+   document that a signature agent using [DIRECTORY] publishes to
+   describe itself: its identity, purpose, rate expectations, and
+   cryptographic keys.  Its parameters are drawn from the OAuth Dynamic
+   Client Registration Metadata registry [DCR], the same namespace used
+   by [CIMD], extended with a single web_bot_auth object.  This document
+   registers that object with IANA and establishes a registry for its
+   members.
+
+About This Document
+
+   This note is to be removed before publishing as an RFC.
+
+   The latest revision of this draft can be found at
+   https://thibmeu.github.io/http-message-signatures-directory/draft-
+   meunier-webbotauth-registry.html.  Status information for this
+   document may be found at https://datatracker.ietf.org/doc/draft-
+   meunier-webbotauth-registry/.
+
+   Discussion of this document takes place on the Web Bot Auth Working
+   Group mailing list (mailto:web-bot-auth@ietf.org), which is archived
+   at https://mailarchive.ietf.org/arch/browse/web-bot-auth/.  Subscribe
+   at https://www.ietf.org/mailman/listinfo/web-bot-auth/.
+
+   Source for this draft and an issue tracker can be found at
+   https://github.com/thibmeu/http-message-signatures-directory.
+
+Status of This Memo
+
+   This Internet-Draft is submitted in full conformance with the
+   provisions of BCP 78 and BCP 79.
+
+
+
+
+
+
+Guerreiro, et al.       Expires 28 December 2026                [Page 1]
+
+Internet-Draft  Registry and Signature Agent card for We       June 2026
+
+
+   Internet-Drafts are working documents of the Internet Engineering
+   Task Force (IETF).  Note that other groups may also distribute
+   working documents as Internet-Drafts.  The list of current Internet-
+   Drafts is at https://datatracker.ietf.org/drafts/current/.
+
+   Internet-Drafts are draft documents valid for a maximum of six months
+   and may be updated, replaced, or obsoleted by other documents at any
+   time.  It is inappropriate to use Internet-Drafts as reference
+   material or to cite them other than as "work in progress."
+
+   This Internet-Draft will expire on 28 December 2026.
+
+Copyright Notice
+
+   Copyright (c) 2026 IETF Trust and the persons identified as the
+   document authors.  All rights reserved.
+
+   This document is subject to BCP 78 and the IETF Trust's Legal
+   Provisions Relating to IETF Documents (https://trustee.ietf.org/
+   license-info) in effect on the date of publication of this document.
+   Please review these documents carefully, as they describe your rights
+   and restrictions with respect to this document.  Code Components
+   extracted from this document must include Revised BSD License text as
+   described in Section 4.e of the Trust Legal Provisions and are
+   provided without warranty as described in the Revised BSD License.
+
+Table of Contents
+
+   1.  Introduction  . . . . . . . . . . . . . . . . . . . . . . . .   3
+   2.  Conventions and Definitions . . . . . . . . . . . . . . . . .   4
+   3.  Signature Agent Card  . . . . . . . . . . . . . . . . . . . .   4
+     3.1.  Client Metadata Parameters  . . . . . . . . . . . . . . .   5
+       3.1.1.  Client ID . . . . . . . . . . . . . . . . . . . . . .   6
+       3.1.2.  JWKS URI  . . . . . . . . . . . . . . . . . . . . . .   6
+       3.1.3.  JWKS  . . . . . . . . . . . . . . . . . . . . . . . .   7
+     3.2.  Web Bot Auth Extension  . . . . . . . . . . . . . . . . .   7
+       3.2.1.  Expected user agent . . . . . . . . . . . . . . . . .   7
+       3.2.2.  robots.txt product token  . . . . . . . . . . . . . .   7
+       3.2.3.  robots.txt compliance . . . . . . . . . . . . . . . .   8
+       3.2.4.  Trigger . . . . . . . . . . . . . . . . . . . . . . .   8
+       3.2.5.  Purpose . . . . . . . . . . . . . . . . . . . . . . .   8
+       3.2.6.  Targeted content  . . . . . . . . . . . . . . . . . .   8
+       3.2.7.  Rate control  . . . . . . . . . . . . . . . . . . . .   9
+       3.2.8.  Rate expectation  . . . . . . . . . . . . . . . . . .   9
+       3.2.9.  Known URLs  . . . . . . . . . . . . . . . . . . . . .   9
+       3.2.10. IP Address List URI . . . . . . . . . . . . . . . . .  10
+   4.  Discovery . . . . . . . . . . . . . . . . . . . . . . . . . .  10
+     4.1.  CIMD-based discovery  . . . . . . . . . . . . . . . . . .  10
+
+
+
+Guerreiro, et al.       Expires 28 December 2026                [Page 2]
+
+Internet-Draft  Registry and Signature Agent card for We       June 2026
+
+
+     4.2.  Formal Syntax . . . . . . . . . . . . . . . . . . . . . .  11
+     4.3.  Out-of-band communication between client and origin . . .  12
+     4.4.  Registry Endpoint . . . . . . . . . . . . . . . . . . . .  12
+       4.4.1.  Authentication  . . . . . . . . . . . . . . . . . . .  12
+       4.4.2.  Efficient Polling with Conditional Requests . . . . .  13
+       4.4.3.  Caching . . . . . . . . . . . . . . . . . . . . . . .  13
+     4.5.  Signature-Agent header  . . . . . . . . . . . . . . . . .  13
+     4.6.  Composable discovery with Signature-Key . . . . . . . . .  13
+     4.7.  Change Notification . . . . . . . . . . . . . . . . . . .  13
+       4.7.1.  Advertising the Notification Endpoint . . . . . . . .  14
+       4.7.2.  Callback Registration . . . . . . . . . . . . . . . .  14
+       4.7.3.  Notification Requests . . . . . . . . . . . . . . . .  14
+       4.7.4.  Notification Processing . . . . . . . . . . . . . . .  15
+   5.  Security Considerations . . . . . . . . . . . . . . . . . . .  15
+     5.1.  Registry Integrity  . . . . . . . . . . . . . . . . . . .  16
+     5.2.  Binding Delegated Keys to the Directory Authority . . . .  16
+     5.3.  Private Registries  . . . . . . . . . . . . . . . . . . .  16
+   6.  Privacy Considerations  . . . . . . . . . . . . . . . . . . .  16
+     6.1.  Access Patterns . . . . . . . . . . . . . . . . . . . . .  16
+   7.  IANA Considerations . . . . . . . . . . . . . . . . . . . . .  16
+     7.1.  OAuth Dynamic Client Registration Metadata
+           Registration  . . . . . . . . . . . . . . . . . . . . . .  17
+     7.2.  Web Bot Auth Metadata Parameters Registry . . . . . . . .  17
+       7.2.1.  Registration template . . . . . . . . . . . . . . . .  17
+       7.2.2.  Initial Registry content  . . . . . . . . . . . . . .  18
+   8.  References  . . . . . . . . . . . . . . . . . . . . . . . . .  20
+     8.1.  Normative References  . . . . . . . . . . . . . . . . . .  20
+     8.2.  Informative References  . . . . . . . . . . . . . . . . .  22
+   Appendix A.  Test Vectors . . . . . . . . . . . . . . . . . . . .  24
+   Appendix B.  Implementations  . . . . . . . . . . . . . . . . . .  24
+   Acknowledgments . . . . . . . . . . . . . . . . . . . . . . . . .  24
+   Changelog . . . . . . . . . . . . . . . . . . . . . . . . . . . .  24
+   Authors' Addresses  . . . . . . . . . . . . . . . . . . . . . . .  26
+
+1.  Introduction
+
+   Signature Agents are entities that originate or forward signed HTTP
+   requests on behalf of users or services.  They include bots
+   developers, platforms providers, and other intermediaries using
+   [DIRECTORY].  These agents often need to identify themselves, and
+   establish trust with origin servers.
+
+
+
+
+
+
+
+
+
+
+Guerreiro, et al.       Expires 28 December 2026                [Page 3]
+
+Internet-Draft  Registry and Signature Agent card for We       June 2026
+
+
+   Today, the mechanisms for doing so are inconsistent: some rely on
+   User-Agent strings (e.g. MyCompanyBot/1.0), others on IP address
+   lists hosted on file servers (e.g. https://curated-bots.com/
+   ips.json), and still others on out-of-band definitions (e.g.
+   documentation on docs.example.com/mybot).  This diversity makes it
+   difficult for operators and origin servers to reliably discover and
+   share a Signature Agent’s purpose, contact information, or rate
+   expectations.
+
+   The OAuth Client ID Metadata Document [CIMD] already defines a
+   resolvable identity: a client_id that is an HTTPS URL dereferencing
+   to a JSON metadata document.  This document reuses it.  A Signature
+   Agent Card takes the client metadata parameters that [CIMD] draws
+   from [DCR], and adds bot-specific information in a single
+   web_bot_auth object.  An existing Client ID Metadata Document is
+   therefore a valid Signature Agent Card.
+
+2.  Conventions and Definitions
+
+   The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT",
+   "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and
+   "OPTIONAL" in this document are to be interpreted as described in
+   BCP 14 [RFC2119] [RFC8174] when, and only when, they appear in all
+   capitals, as shown here.
+
+3.  Signature Agent Card
+
+   A Signature Agent Card is a JSON object describing a Signature Agent.
+   Its parameters are drawn from the OAuth Dynamic Client Registration
+   Metadata registry [DCR], the same parameter namespace used by [CIMD].
+   Web bot auth-specific information is carried in a single web_bot_auth
+   object, defined in Section 3.2.
+
+   Because the card reuses the [CIMD] parameter namespace, an existing
+   Client ID Metadata Document is a valid Signature Agent Card.  A
+   client that does not understand the web_bot_auth object ignores it.
+
+   The Signature-Agent header is defined in Section 4.1 of [DIRECTORY].
+   A Signature Agent Card can be referenced from that header using
+   type=cimd, as described in Section 4.1.
+
+
+
+
+
+
+
+
+
+
+
+Guerreiro, et al.       Expires 28 December 2026                [Page 4]
+
+Internet-Draft  Registry and Signature Agent card for We       June 2026
+
+
+{
+  "client_id": "https://example.com/bot",
+  "client_name": "Example Bot",
+  "client_uri": "https://example.com/bot/about.html",
+  "logo_uri": "https://example.com/logo.png",
+  "contacts": ["mailto:bot-support@example.com"],
+  "jwks_uri": "https://example.com/.well-known/http-message-signatures-directory",
+  "web_bot_auth": {
+    "expected-user-agent": "Mozilla/5.0 ExampleBot",
+    "rfc9309-product-token": "ExampleBot",
+    "rfc9309-compliance": ["User-Agent", "Allow", "Disallow", "Content-Usage"],
+    "trigger": "fetcher",
+    "purpose": "tdm",
+    "targeted-content": "Cat pictures",
+    "rate-control": "429",
+    "rate-expectation": "avg=10rps;max=100rps",
+    "known-urls": ["/", "/robots.txt", "*.png"],
+    "ips_uri": "https://example.com/ips.json"
+  }
+}
+
+   Unless otherwise specified, all parameters in this document are
+   OPTIONAL, except that a card resolved through its client_id MUST
+   carry client_id (see Section 3.1.1).  There MUST be at least one
+   parameter set.
+
+   Parameters for which the value is unknown MUST be ignored.  All
+   string values are UTF-8.
+
+3.1.  Client Metadata Parameters
+
+   The following parameters are OAuth client metadata parameters defined
+   in [DCR] and used as in [CIMD].  They keep the semantics defined
+   there; this section only notes how they are used by a Signature
+   Agent.
+
+   client_id  A resolvable identifier for the Signature Agent.  See
+      Section 3.1.1.
+
+   client_name  A friendly name for the Signature Agent, e.g.
+      ExampleBot.
+
+   client_uri  A URL of a web page describing the Signature Agent: what
+      it does, and how it handles the data it fetches, e.g.
+      https://example.com/bot/about.html.
+
+   logo_uri  A URL referencing a logo for the Signature Agent, for quick
+      visual identification, e.g. https://example.com/logo.png.
+
+
+
+Guerreiro, et al.       Expires 28 December 2026                [Page 5]
+
+Internet-Draft  Registry and Signature Agent card for We       June 2026
+
+
+   contacts  An array of URIs providing reliable communication channels,
+      typically email addresses, e.g. ["mailto:bot-
+      support@example.com"].
+
+   jwks_uri  See Section 3.1.2.
+
+   jwks  A JWK Set as defined in Section 5 of [JWK].  See Section 3.1.3.
+
+3.1.1.  Client ID
+
+   The client_id parameter is the resolvable identity of the Signature
+   Agent, as defined in [CIMD].  It is an HTTPS URL that, when
+   dereferenced, returns the Signature Agent Card.  A card retrieved
+   through its client_id MUST include the client_id parameter.
+
+   A client retrieving a card from a URL MUST use the GET method, MUST
+   treat any status code other than 200 (OK) as an error, and MUST NOT
+   follow HTTP redirects.  The client_id value in the returned document
+   MUST be identical to the URL used to retrieve it, compared as
+   described in Section 6.2.1 of [RFC3986] (simple string comparison).
+
+   Example
+
+   *  https://example.com/bot
+
+3.1.2.  JWKS URI
+
+   The jwks_uri parameter provides the URL of a JWK Set as defined in
+   Section 5 of [JWK], following the [DCR] semantics.  [DCR] does not
+   mandate a media type for the resource at jwks_uri.
+
+   When present, this parameter separates key material discovery from
+   metadata discovery.  Clients that need key material SHOULD fetch the
+   key set at the given URL rather than relying on the jwks parameter.
+   This separation allows registry operators to host metadata and key
+   material on different endpoints, supporting deployment scenarios
+   where the registry endpoint itself contains signature agent card
+   metadata but key material is hosted elsewhere.
+
+   A Signature Agent Card MUST NOT contain both jwks_uri and jwks.
+   Clients SHOULD reject a card that contains both parameters.
+
+   The resource at jwks_uri SHOULD be signed using
+   [HTTP-MESSAGE-SIGNATURES].  Clients SHOULD validate the signature and
+   ignore keys that do not carry a corresponding valid signature.
+
+   The URI scheme MUST be https.
+
+
+
+
+Guerreiro, et al.       Expires 28 December 2026                [Page 6]
+
+Internet-Draft  Registry and Signature Agent card for We       June 2026
+
+
+   Example
+
+   *  https://example.com/.well-known/http-message-signatures-directory
+
+3.1.3.  JWKS
+
+   The jwks parameter contains a JWK Set as defined in Section 5 of
+   [JWK].  It is the inline client metadata parameter defined in [DCR].
+
+   If jwks is present, it is RECOMMENDED that the card is signed using
+   [HTTP-MESSAGE-SIGNATURES].  Content-Digest header MUST be included in
+   the covered components.
+
+   TODO: describe signature, CWS keys.
+
+3.2.  Web Bot Auth Extension
+
+   The web_bot_auth parameter is a JSON object carrying bot-specific
+   metadata.  It is registered in the OAuth Dynamic Client Registration
+   Metadata registry [DCR] (see Section 7), so that it may appear in any
+   Client ID Metadata Document [CIMD].  Its members are governed by the
+   "Web Bot Auth Metadata Parameters" registry defined in Section 7.
+   Members for which the value is unknown MUST be ignored.
+
+   The members defined by this document are below.
+
+3.2.1.  Expected user agent
+
+   The expected-user-agent parameter specifies one or more User-Agent
+   strings as defined in Section 10.1.5 of [HTTP] or prefix matches.
+   Prefixes MAY use * as a wildcard.
+
+   Example
+
+   *  Mozilla/5.0 ExampleBot
+
+3.2.2.  robots.txt product token
+
+   The rfc9309-product-token parameter specifies the product token used
+   for robots.txt directives per Section 2.2.1 of [ROBOTSTXT].
+
+   Example
+
+   *  ExampleBot
+
+
+
+
+
+
+
+Guerreiro, et al.       Expires 28 December 2026                [Page 7]
+
+Internet-Draft  Registry and Signature Agent card for We       June 2026
+
+
+3.2.3.  robots.txt compliance
+
+   The rfc9309-compliance parameter lists directives from robots.txt
+   that the agent implements.
+
+   Example
+
+   *  ["User-Agent", "Disallow"]
+
+   *  ["User-Agent", "Disallow", "CrawlDelay"]
+
+3.2.4.  Trigger
+
+   The trigger parameter indicates the operational mode of the agent.
+
+   Valid values:
+
+   1.  fetcher - request initiated by the user
+
+   2.  crawler - autonomous scanning
+
+3.2.5.  Purpose
+
+   The purpose parameter describes the intended use of collected data.
+   Values SHOULD be drawn from a controlled vocabulary, such as
+   [AIPREF-VOCAB].
+
+   Example
+
+   *  search
+
+   *  tdm
+
+3.2.6.  Targeted content
+
+   The targeted-content parameter specifies the type of data the agent
+   seeks.  Its format is arbitrary UTF-8 encoded string.
+
+   Example
+
+   *  SEO analysis
+
+   *  Vulnerability scanning
+
+   *  Ads verification
+
+
+
+
+
+
+Guerreiro, et al.       Expires 28 December 2026                [Page 8]
+
+Internet-Draft  Registry and Signature Agent card for We       June 2026
+
+
+3.2.7.  Rate control
+
+   The rate-control parameter indicates how origins can influence the
+   agent’s request rate.
+
+   TODO: specify a format
+
+   Example
+
+   *  CrawlDelay in robots.txt (non-standard)
+
+   *  Custom tool
+
+   *  429 + [RATELIMIT-HEADER]
+
+3.2.8.  Rate expectation
+
+   The rate-expectation parameter specifies anticipated request volume
+   or burstiness.
+
+   TODO: consider a format such as avg=10rps;max=100rps
+
+   Example
+
+   *  500 rps
+
+   *  Spikes during reindexing
+
+3.2.9.  Known URLs
+
+   The known-urls parameter lists predictable endpoints accessed by the
+   agent.
+
+   These URLs may be absolute URLs like https://example.com/index.html.
+   They could be relative path like /ads.txt.  Or they can use * as
+   wildcard such as *.png.
+
+   Example
+
+   *  ["/"]
+
+   *  ["/ads.txt"]
+
+   *  ["/favicon.ico"]
+
+   *  ["/index.html"]
+
+
+
+
+
+Guerreiro, et al.       Expires 28 December 2026                [Page 9]
+
+Internet-Draft  Registry and Signature Agent card for We       June 2026
+
+
+3.2.10.  IP Address List URI
+
+   The ips_uri parameter provides the URL of the signature agent's IP
+   address list as defined in [JAFAR].
+
+   The URI scheme MUST be https.
+
+   Example
+
+   *  https://example.com/ips.json
+
+4.  Discovery
+
+   A Signature Agent Card is discovered by dereferencing its client_id,
+   as described in Section 4.1, or from a registry.
+
+   A registry is a list of URLs, each refering to a signature agent
+   card.  An entry MAY be the client_id of a Signature Agent Card.
+
+   The URI scheme MUST be one of:
+
+   *  https: Points to an HTTPS resource serving a signature agent card
+
+   *  data: Contains an inline signature agent card
+
+4.1.  CIMD-based discovery
+
+   A Signature Agent advertises its identity through a resolvable
+   client_id URL, as defined in [CIMD].  A consumer discovers the
+   agent's metadata and keys as follows:
+
+   1.  Obtain a client_id URL, from a Signature-Agent header with
+       type=cimd (Section 4.5), a registry entry, or out of band.
+
+   2.  Dereference the client_id with a GET request.  The response MUST
+       be 200 (OK), redirects MUST NOT be followed, and the returned
+       client_id MUST match the requested URL (see Section 3.1.1).  The
+       response is the Signature Agent Card.
+
+   3.  Obtain key material.  If the card has a jwks_uri, fetch the JWK
+       Set at that URL; otherwise use the inline jwks parameter.
+
+   The metadata document and the key set are distinct resources reached
+   at different hops, so no content negotiation between them is
+   required.
+
+
+
+
+
+
+Guerreiro, et al.       Expires 28 December 2026               [Page 10]
+
+Internet-Draft  Registry and Signature Agent card for We       June 2026
+
+
+GET /bot HTTP/1.1
+Host: example.com
+
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{
+  "client_id": "https://example.com/bot",
+  "client_name": "Example Bot",
+  "jwks_uri": "https://example.com/.well-known/http-message-signatures-directory",
+  "web_bot_auth": {
+    "trigger": "fetcher",
+    "purpose": "tdm"
+  }
+}
+
+   Example
+
+   # An example list of bots
+   https://bot1.example.com/.well-known/http-message-signatures-directory
+   https://crawler2.example.com/.well-known/http-message-signatures-directory
+
+   # Now the list of platforms
+   https://zerotrust-gateway.example.com/v1/signature-agent-card
+
+   # Below is an inlined card with the data URL scheme
+   data:application/json,{"client_name":"Inline Bot","jwks_uri":"https://inline.example.com/.well-known/http-message-signatures-directory"}
+
+4.2.  Formal Syntax
+
+   Below is an Augmented Backus-Naur Form (ABNF) description, as
+   described in [ABNF].
+
+   The below definition imports https-URI from [HTTP], and dataurl from
+   [DATAURL].
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Guerreiro, et al.       Expires 28 December 2026               [Page 11]
+
+Internet-Draft  Registry and Signature Agent card for We       June 2026
+
+
+   registry = *(cardendpointline / emptyline)
+   cardendpointline = (
+       https-URI /      ; As defined in Section 4.2.2 of RFC 9110
+       dataurl          ; As defined in Section 3 of RFC 2397
+   ) EOL
+
+
+   comment = "#" *(UTF8-char-noctl / WS / "#")
+   emptyline = EOL
+   EOL = *WS [comment] NL ; end-of-line may have
+                          ; optional trailing comment
+   NL = %x0D / %x0A / %x0D.0A
+   WS = %x20 / %x09
+
+   ; UTF8 derived from RFC 3629, but excluding control characters
+
+   UTF8-char-noctl = UTF8-1-noctl / UTF8-2 / UTF8-3 / UTF8-4
+   UTF8-1-noctl = %x21 / %x22 / %x24-7F ; excluding control, space, "#"
+   UTF8-2 = %xC2-DF UTF8-tail
+   UTF8-3 = %xE0 %xA0-BF UTF8-tail / %xE1-EC 2UTF8-tail /
+            %xED %x80-9F UTF8-tail / %xEE-EF 2UTF8-tail
+   UTF8-4 = %xF0 %x90-BF 2UTF8-tail / %xF1-F3 3UTF8-tail /
+            %xF4 %x80-8F 2UTF8-tail
+
+   UTF8-tail = %x80-BF
+
+4.3.  Out-of-band communication between client and origin
+
+   A signature agent MAY submit their signature agent card to an origin,
+   or the origin MAY manually add them to their local registry.
+
+4.4.  Registry Endpoint
+
+   A registry MAY be provided via a GitHub repository, a public file
+   server, or a dedicated endpoint.
+
+   The registry SHOULD be served over HTTPS.
+
+   A client application SHOULD validate the registry format and reject
+   malformed entries.
+
+4.4.1.  Authentication
+
+   A registry endpoint MAY require authentication to restrict access to
+   authorized clients.  This allows a registry operator to expose
+   registries without revealing their contents publicly.
+
+
+
+
+
+Guerreiro, et al.       Expires 28 December 2026               [Page 12]
+
+Internet-Draft  Registry and Signature Agent card for We       June 2026
+
+
+   No specific authentication mechanism is mandated.  Implementations
+   MAY use pre-shared keys as mentioned in [PSK-TLS], bearer tokens as
+   defined in [OAUTH-BEARER], or HTTP Message Signatures as defined in
+   [HTTP-MESSAGE-SIGNATURES].  HTTP Message Signatures are RECOMMENDED
+   when key rotation without out-of-band coordination is desired.
+
+4.4.2.  Efficient Polling with Conditional Requests
+
+   Registry servers SHOULD include ETag and Last-Modified response
+   header fields as defined in Section 8.8 of [HTTP].
+
+   Clients SHOULD send If-None-Match or If-Modified-Since precondition
+   header fields as defined in Section 13.1 of [HTTP] on subsequent
+   requests.  A server SHOULD respond with 304 (Not Modified) when the
+   registry has not changed, avoiding redundant data transfer.
+
+4.4.3.  Caching
+
+   Registry servers SHOULD include a Cache-Control response header field
+   as defined in [HTTP-CACHE] to communicate the intended freshness
+   lifetime of the registry content.  Clients SHOULD respect these cache
+   directives and SHOULD NOT poll more frequently than indicated.
+
+4.5.  Signature-Agent header
+
+   When used for HTTP Message Signatures, a Signature Agent Card MAY be
+   discovered via a Signature-Agent header member with type=cimd.  The
+   URI carried in that member is the client_id of a Signature Agent Card
+   resolved as described in Section 4.1.
+
+4.6.  Composable discovery with Signature-Key
+
+   The discovery in this document is anchored on the client_id URL and
+   is independent of the header that carries it.  [SIGNATURE-KEY]
+   defines a composable Signature-Key header with an extensible registry
+   of key-distribution schemes.  A future scheme could carry a client_id
+   URL, letting a verifier resolve a Signature Agent Card per-signature
+   alongside the keying material.  This document does not define such a
+   scheme; it is noted as a possible composable carrier.
+
+4.7.  Change Notification
+
+   Pull-based consumption with conditional requests is sufficient for
+   most deployments.  When lower notification latency is required (e.g.,
+   to promptly act on entry removal), a registry operator MAY implement
+   a push-based change notification mechanism.
+
+
+
+
+
+Guerreiro, et al.       Expires 28 December 2026               [Page 13]
+
+Internet-Draft  Registry and Signature Agent card for We       June 2026
+
+
+4.7.1.  Advertising the Notification Endpoint
+
+   A registry operator that supports change notifications SHOULD
+   advertise its notification endpoint in the registry HTTP response
+   using a Link header field as defined in [WEB-LINKING]:
+
+Link: <https://registry.example/v1/registry-changes>; rel="registry-changes"
+
+   The registry-changes link relation identifies an endpoint to which
+   clients may register callbacks out of band.
+
+   TODO: Register the registry-changes link relation with IANA, or
+   replace it with an extension relation URI.
+
+4.7.2.  Callback Registration
+
+   Registration of a client callback URL with the registry operator is
+   performed out of band.  No specific registration protocol is defined
+   by this document.  An unsubscribe mechanism SHOULD be considered, and
+   MAY also be out of band.
+
+4.7.3.  Notification Requests
+
+   When an entry is added to or removed from the registry, the registry
+   operator MUST send an HTTP request to each registered callback URL.
+
+   The format in [CDDL] is as follows:
+
+   Action = "put" / "delete"
+
+   Notification = {
+     action: Action,
+     signature-agent: tstr
+   }
+
+   TODO: should we use application/json, a new media-type, permit binary
+   encoding?  TODO: should signature-agent be an array?
+
+   action denotes the operation performed on the registry: 1. put when a
+   new entry has been added, 2. delete when an entry has been removed.
+
+   The request MUST use POST.  It MUST be signed using
+   [HTTP-MESSAGE-SIGNATURES] with a key present in the registry
+   operator's existing signature agent card.  This is the signature
+   agent card associated with the registry operator during out-of-band
+   callback registration.
+
+   The Content-Type SHOULD be application/json.
+
+
+
+Guerreiro, et al.       Expires 28 December 2026               [Page 14]
+
+Internet-Draft  Registry and Signature Agent card for We       June 2026
+
+
+   Example notification for an added entry:
+
+POST /registry-callback HTTP/1.1
+Host: origin.example
+Content-Type: application/json
+Signature-Input: sig1=("@method" "@authority" "@path" "content-digest"); \
+  created=1741046400; keyid="NFcWBst6DXG-N35nHdzMrioWntdzNZghQSkjHNMMSjw"
+Signature: sig1=:base64signature:
+Content-Digest: sha-256=:base64hash:
+
+{
+  "action": "put",
+  "signature-agent": "https://abc123.registry.example/.well-known/signature-agent-card"
+}
+
+4.7.4.  Notification Processing
+
+   Upon receiving a notification, the client MUST verify the HTTP
+   Message Signature against the registry operator's key, discovered via
+   the registry operator's signature-agent card.  Notifications with
+   missing or invalid signatures MUST be rejected.
+
+   A notification is advisory only.  The registry endpoint remains the
+   authoritative source of truth.  After verifying a put notification,
+   clients SHOULD re-fetch the affected signature agent card to obtain
+   current metadata.
+
+   For delete notifications, clients SHOULD confirm the removal by re-
+   fetching the full registry.  This confirmation does not need to
+   happen synchronously with notification processing.
+
+   Registry operators SHOULD retry delivery of failed notifications with
+   exponential backoff.  Clients that miss notifications will recover on
+   their next conditional pull from the registry endpoint.
+
+5.  Security Considerations
+
+   Malicious actors may put properties which are not theirs in the
+   registry.  If signatures are present, clients MUST verify them.
+   Clients SHOULD reject cards with invalid signatures.
+
+
+
+
+
+
+
+
+
+
+
+Guerreiro, et al.       Expires 28 December 2026               [Page 15]
+
+Internet-Draft  Registry and Signature Agent card for We       June 2026
+
+
+5.1.  Registry Integrity
+
+   When a registry is served over HTTPS, TLS provides channel integrity
+   between the server and the client.  To additionally bind the registry
+   contents to the registry operator's cryptographic identity, registry
+   servers SHOULD sign their HTTP responses using
+   [HTTP-MESSAGE-SIGNATURES] with a key present in the registry
+   operator's own signature agent card.  Clients SHOULD verify such
+   signatures when present.
+
+5.2.  Binding Delegated Keys to the Directory Authority
+
+   When a signature agent card delegates key discovery using jwks_uri,
+   clients SHOULD validate the referenced directory response to ensure
+   the authenticity and integrity of the delegated key material.
+
+   When a directory server provides key material over HTTP or HTTPS, it
+   is RECOMMENDED that it include one HTTP Message Signature per key in
+   the response, with each key used to provide one signature.  The
+   signature SHOULD cover @authority with the req flag set, and SHOULD
+   include the created, expires, keyid, and tag signature parameters.
+   The tag value MUST be http-message-signatures-directory.
+
+   Clients SHOULD validate these signatures using the keys provided by
+   the directory.  Clients SHOULD ignore keys from a directory response
+   that do not have a corresponding valid signature binding the key
+   material to the directory authority.
+
+5.3.  Private Registries
+
+   Registry endpoints that require authentication as described in
+   Section 4.4.1 limit exposure of registry entries to authorized
+   clients only.  Registry operators SHOULD use authenticated endpoints
+   when the enumeration of their registry entries is sensitive.
+
+6.  Privacy Considerations
+
+   TODO
+
+6.1.  Access Patterns
+
+   Registry servers SHOULD avoid logging personally identifiable
+   information from client requests.  Clients fetching a registry reveal
+   their interest in its entries; registry servers SHOULD treat access
+   logs as sensitive.
+
+7.  IANA Considerations
+
+
+
+
+Guerreiro, et al.       Expires 28 December 2026               [Page 16]
+
+Internet-Draft  Registry and Signature Agent card for We       June 2026
+
+
+7.1.  OAuth Dynamic Client Registration Metadata Registration
+
+   IANA is requested to register the following parameter in the "OAuth
+   Dynamic Client Registration Metadata" registry established by [DCR].
+
+   *Client Metadata Name:*  web_bot_auth
+
+   *Client Metadata Description:*  A JSON object carrying bot-specific
+      metadata for a Signature Agent.  Its members are registered in the
+      "Web Bot Auth Metadata Parameters" registry.
+
+   *Change Controller:*  IETF
+
+   *Reference:*  Section 3.2
+
+   The remaining parameters used by a Signature Agent Card (client_id,
+   client_name, client_uri, logo_uri, contacts, jwks_uri, jwks) are
+   already registered OAuth client metadata parameters and are not
+   registered by this document.
+
+7.2.  Web Bot Auth Metadata Parameters Registry
+
+   IANA is requested to create the "Web Bot Auth Metadata Parameters"
+   registry.  This registry governs the members of the web_bot_auth
+   object defined in Section 3.2.
+
+7.2.1.  Registration template
+
+   New registrations need to list the following attributes:
+
+   *Parameter Name:*  The name requested (e.g. "purpose").  This name is
+      case sensitive.  Names may not match other registered names in a
+      case-insensitive manner unless the Designated Experts state that
+      there is a compelling reason to allow an exception
+   *Parameter Description:*  Brief description of the parameter
+   *Change Controller:*  For Standards Track RFCs, list the "IESG".  For
+      others, give the name of the responsible party.  Other details
+      (e.g., postal address, email address, home page URI) may also be
+      included.
+   *Reference:*  Where this parameter is defined
+   *Notes:*  Any notes associated with the entry
+
+   New entries in this registry are subject to the Specification
+   Required registration policy ([RFC8126], Section 4.6).  Designated
+   experts can reject registrations on the basis that they do not meet
+   the security and privacy requirements defined in TODO.
+
+
+
+
+
+Guerreiro, et al.       Expires 28 December 2026               [Page 17]
+
+Internet-Draft  Registry and Signature Agent card for We       June 2026
+
+
+7.2.2.  Initial Registry content
+
+   This section registers the web_bot_auth member names defined in
+   Section 3.2 in this registry.
+
+7.2.2.1.  Expected User Agent Parameter
+
+   *Parameter Name:*  expected-user-agent
+
+   *Parameter Description:*  String or fragment patterns
+
+   *Change Controller:*  IETF
+
+   *Reference:*  Section 3.2.1
+
+   *Notes:*  N/A
+
+7.2.2.2.  RFC9309 Product Token Parameter
+
+   *Parameter Name:*  rfc9309-product-token
+
+   *Parameter Description:*  Robots.txt product token your signature-
+      agent satisfies.
+
+   *Change Controller:*  IETF
+
+   *Reference:*  Section 3.2.2
+
+   *Notes:*  N/A
+
+7.2.2.3.  RFC9309 Compliance Parameter
+
+   *Parameter Name:*  rfc9309-compliance
+
+   *Parameter Description:*  Does your signature-agent respect
+      robots.txt.
+
+   *Change Controller:*  IETF
+
+   *Reference:*  Section 3.2.3
+
+   *Notes:*  N/A
+
+7.2.2.4.  Trigger Parameter
+
+   *Parameter Name:*  trigger
+
+   *Parameter Description:*  Fetcher/Crawler
+
+
+
+Guerreiro, et al.       Expires 28 December 2026               [Page 18]
+
+Internet-Draft  Registry and Signature Agent card for We       June 2026
+
+
+   *Change Controller:*  IETF
+
+   *Reference:*  Section 3.2.4
+
+   *Notes:*  N/A
+
+7.2.2.5.  Purpose Parameter
+
+   *Parameter Name:*  purpose
+
+   *Parameter Description:*  Intended use for the collected data
+
+   *Change Controller:*  IETF
+
+   *Reference:*  Section 3.2.5
+
+   *Notes:*  N/A
+
+7.2.2.6.  Targeted Content Parameter
+
+   *Parameter Name:*  targeted-content
+
+   *Parameter Description:*  Type of data your agent seeks
+
+   *Change Controller:*  IETF
+
+   *Reference:*  Section 3.2.6
+
+   *Notes:*  N/A
+
+7.2.2.7.  Rate control Parameter
+
+   *Parameter Name:*  rate-control
+
+   *Parameter Description:*  How can an origin control your crawl rate
+
+   *Change Controller:*  IETF
+
+   *Reference:*  Section 3.2.7
+
+   *Notes:*  N/A
+
+7.2.2.8.  Rate expectation Parameter
+
+   *Parameter Name:*  rate-expectation
+
+   *Parameter Description:*  Expected traffic and intensity
+
+
+
+
+Guerreiro, et al.       Expires 28 December 2026               [Page 19]
+
+Internet-Draft  Registry and Signature Agent card for We       June 2026
+
+
+   *Change Controller:*  IETF
+
+   *Reference:*  Section 3.2.8
+
+   *Notes:*  N/A
+
+7.2.2.9.  Known URLs Parameter
+
+   *Parameter Name:*  known-urls
+
+   *Parameter Description:*  Predictable endpoint accessed
+
+   *Change Controller:*  IETF
+
+   *Reference:*  Section 3.2.9
+
+   *Notes:*  N/A
+
+7.2.2.10.  IP Address List URI Parameter
+
+   *Parameter Name:*  ips_uri
+
+   *Parameter Description:*  URL of the signature agent's IP address
+      list in [JAFAR] format.
+
+   *Change Controller:*  IETF
+
+   *Reference:*  Section 3.2.10
+
+   *Notes:*  N/A
+
+8.  References
+
+8.1.  Normative References
+
+   [ABNF]     Crocker, D., Ed. and P. Overell, "Augmented BNF for Syntax
+              Specifications: ABNF", STD 68, RFC 5234,
+              DOI 10.17487/RFC5234, January 2008,
+              <https://www.rfc-editor.org/rfc/rfc5234>.
+
+   [AIPREF-VOCAB]
+              Keller, P. and M. Thomson, "A Vocabulary For Expressing AI
+              Usage Preferences", Work in Progress, Internet-Draft,
+              draft-ietf-aipref-vocab-06, 27 April 2026,
+              <https://datatracker.ietf.org/doc/html/draft-ietf-aipref-
+              vocab-06>.
+
+
+
+
+
+Guerreiro, et al.       Expires 28 December 2026               [Page 20]
+
+Internet-Draft  Registry and Signature Agent card for We       June 2026
+
+
+   [CDDL]     Birkholz, H., Vigano, C., and C. Bormann, "Concise Data
+              Definition Language (CDDL): A Notational Convention to
+              Express Concise Binary Object Representation (CBOR) and
+              JSON Data Structures", RFC 8610, DOI 10.17487/RFC8610,
+              June 2019, <https://www.rfc-editor.org/rfc/rfc8610>.
+
+   [CIMD]     Parecki, A. and E. Smith, "OAuth Client ID Metadata
+              Document", Work in Progress, Internet-Draft, draft-ietf-
+              oauth-client-id-metadata-document-01, 1 March 2026,
+              <https://datatracker.ietf.org/doc/html/draft-ietf-oauth-
+              client-id-metadata-document-01>.
+
+   [DCR]      Richer, J., Ed., Jones, M., Bradley, J., Machulak, M., and
+              P. Hunt, "OAuth 2.0 Dynamic Client Registration Protocol",
+              RFC 7591, DOI 10.17487/RFC7591, July 2015,
+              <https://www.rfc-editor.org/rfc/rfc7591>.
+
+   [DIRECTORY]
+              Meunier, T. and S. Major, "HTTP Message Signatures
+              Directory", Work in Progress, Internet-Draft, draft-
+              meunier-webbotauth-httpsig-directory-00, 26 June 2026,
+              <https://datatracker.ietf.org/doc/html/draft-meunier-
+              webbotauth-httpsig-directory-00>.
+
+   [HTTP]     Fielding, R., Ed., Nottingham, M., Ed., and J. Reschke,
+              Ed., "HTTP Semantics", STD 97, RFC 9110,
+              DOI 10.17487/RFC9110, June 2022,
+              <https://www.rfc-editor.org/rfc/rfc9110>.
+
+   [HTTP-CACHE]
+              Fielding, R., Ed., Nottingham, M., Ed., and J. Reschke,
+              Ed., "HTTP Caching", STD 98, RFC 9111,
+              DOI 10.17487/RFC9111, June 2022,
+              <https://www.rfc-editor.org/rfc/rfc9111>.
+
+   [HTTP-MESSAGE-SIGNATURES]
+              Backman, A., Ed., Richer, J., Ed., and M. Sporny, "HTTP
+              Message Signatures", RFC 9421, DOI 10.17487/RFC9421,
+              February 2024, <https://www.rfc-editor.org/rfc/rfc9421>.
+
+   [HTTP-MORE-STATUS-CODE]
+              Nottingham, M. and R. Fielding, "Additional HTTP Status
+              Codes", RFC 6585, DOI 10.17487/RFC6585, April 2012,
+              <https://www.rfc-editor.org/rfc/rfc6585>.
+
+
+
+
+
+
+
+Guerreiro, et al.       Expires 28 December 2026               [Page 21]
+
+Internet-Draft  Registry and Signature Agent card for We       June 2026
+
+
+   [JAFAR]    Illyes, G., "A JSON-Based Format for Publishing IP Ranges
+              of Automated HTTP Clients", Work in Progress, Internet-
+              Draft, draft-illyes-webbotauth-jafar-00, 21 April 2026,
+              <https://datatracker.ietf.org/doc/html/draft-illyes-
+              webbotauth-jafar-00>.
+
+   [JWK]      Jones, M., "JSON Web Key (JWK)", RFC 7517,
+              DOI 10.17487/RFC7517, May 2015,
+              <https://www.rfc-editor.org/rfc/rfc7517>.
+
+   [JWK-OKP]  Liusvaara, I., "CFRG Elliptic Curve Diffie-Hellman (ECDH)
+              and Signatures in JSON Object Signing and Encryption
+              (JOSE)", RFC 8037, DOI 10.17487/RFC8037, January 2017,
+              <https://www.rfc-editor.org/rfc/rfc8037>.
+
+   [JWK-THUMBPRINT]
+              Jones, M. and N. Sakimura, "JSON Web Key (JWK)
+              Thumbprint", RFC 7638, DOI 10.17487/RFC7638, September
+              2015, <https://www.rfc-editor.org/rfc/rfc7638>.
+
+   [RFC2119]  Bradner, S., "Key words for use in RFCs to Indicate
+              Requirement Levels", BCP 14, RFC 2119,
+              DOI 10.17487/RFC2119, March 1997,
+              <https://www.rfc-editor.org/rfc/rfc2119>.
+
+   [RFC3986]  Berners-Lee, T., Fielding, R., and L. Masinter, "Uniform
+              Resource Identifier (URI): Generic Syntax", STD 66,
+              RFC 3986, DOI 10.17487/RFC3986, January 2005,
+              <https://www.rfc-editor.org/rfc/rfc3986>.
+
+   [RFC8126]  Cotton, M., Leiba, B., and T. Narten, "Guidelines for
+              Writing an IANA Considerations Section in RFCs", BCP 26,
+              RFC 8126, DOI 10.17487/RFC8126, June 2017,
+              <https://www.rfc-editor.org/rfc/rfc8126>.
+
+   [RFC8174]  Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC
+              2119 Key Words", BCP 14, RFC 8174, DOI 10.17487/RFC8174,
+              May 2017, <https://www.rfc-editor.org/rfc/rfc8174>.
+
+   [WEB-LINKING]
+              Nottingham, M., "Web Linking", RFC 8288,
+              DOI 10.17487/RFC8288, October 2017,
+              <https://www.rfc-editor.org/rfc/rfc8288>.
+
+8.2.  Informative References
+
+
+
+
+
+
+Guerreiro, et al.       Expires 28 December 2026               [Page 22]
+
+Internet-Draft  Registry and Signature Agent card for We       June 2026
+
+
+   [CBCP]     Illyes, G., Kühlewind, M., and K. Aj, "Crawler best
+              practices", Work in Progress, Internet-Draft, draft-
+              illyes-webbotauth-cbcp-00, 21 April 2026,
+              <https://datatracker.ietf.org/doc/html/draft-illyes-
+              webbotauth-cbcp-00>.
+
+   [DATAURL]  Masinter, L., "The "data" URL scheme", RFC 2397,
+              DOI 10.17487/RFC2397, August 1998,
+              <https://www.rfc-editor.org/rfc/rfc2397>.
+
+   [OAUTH-BEARER]
+              Jones, M. and D. Hardt, "The OAuth 2.0 Authorization
+              Framework: Bearer Token Usage", RFC 6750,
+              DOI 10.17487/RFC6750, October 2012,
+              <https://www.rfc-editor.org/rfc/rfc6750>.
+
+   [OPENID-CONNECT-DISCOVERY]
+              "OpenID Connect Discovery 1.0", n.d.,
+              <https://openid.net/specs/openid-connect-discovery-
+              1_0.html>.
+
+   [PSK-TLS]  Housley, R., Hoyland, J., Sethi, M., and C. A. Wood,
+              "Guidance for External Pre-Shared Key (PSK) Usage in TLS",
+              RFC 9257, DOI 10.17487/RFC9257, July 2022,
+              <https://www.rfc-editor.org/rfc/rfc9257>.
+
+   [RATELIMIT-HEADER]
+              Polli, R., Ruiz, A. M., and D. Miller, "RateLimit header
+              fields for HTTP", Work in Progress, Internet-Draft, draft-
+              ietf-httpapi-ratelimit-headers-11, 23 May 2026,
+              <https://datatracker.ietf.org/doc/html/draft-ietf-httpapi-
+              ratelimit-headers-11>.
+
+   [RFC8446]  Rescorla, E., "The Transport Layer Security (TLS) Protocol
+              Version 1.3", RFC 8446, DOI 10.17487/RFC8446, August 2018,
+              <https://www.rfc-editor.org/rfc/rfc8446>.
+
+   [ROBOTSTXT]
+              Koster, M., Illyes, G., Zeller, H., and L. Sassman,
+              "Robots Exclusion Protocol", RFC 9309,
+              DOI 10.17487/RFC9309, September 2022,
+              <https://www.rfc-editor.org/rfc/rfc9309>.
+
+
+
+
+
+
+
+
+
+Guerreiro, et al.       Expires 28 December 2026               [Page 23]
+
+Internet-Draft  Registry and Signature Agent card for We       June 2026
+
+
+   [SIGNATURE-KEY]
+              Hardt, D. and T. Meunier, "HTTP Signature Keys", Work in
+              Progress, Internet-Draft, draft-hardt-httpbis-signature-
+              key-05, 17 June 2026,
+              <https://datatracker.ietf.org/doc/html/draft-hardt-
+              httpbis-signature-key-05>.
+
+   [UTF8]     Yergeau, F., "UTF-8, a transformation format of ISO
+              10646", STD 63, RFC 3629, DOI 10.17487/RFC3629, November
+              2003, <https://www.rfc-editor.org/rfc/rfc3629>.
+
+Appendix A.  Test Vectors
+
+   TODO
+
+Appendix B.  Implementations
+
+   TODO
+
+Acknowledgments
+
+   TODO
+
+   The editor would also like to thank the following individuals (listed
+   in alphabetical order) for feedback, insight, and implementation of
+   this document -
+
+Changelog
+
+   draft-meunier-webbotauth-registry-03
+
+   *  Make the Signature Agent Card an OAuth client metadata document
+      with a web_bot_auth object.
+
+   *  Add resolvable client_id discovery: GET, 200 OK, no redirects, and
+      an exact client_id match.
+
+   *  Allow Signature-Agent members with type=cimd and registry entries
+      to point to a client_id URL.
+
+   *  Register web_bot_auth in the OAuth Dynamic Client Registration
+      Metadata registry.
+
+   *  Move bot-specific fields into a new Web Bot Auth Metadata
+      Parameters registry.
+
+   *  Stop redefining shared client metadata fields; reference RFC 7591
+      instead.
+
+
+
+Guerreiro, et al.       Expires 28 December 2026               [Page 24]
+
+Internet-Draft  Registry and Signature Agent card for We       June 2026
+
+
+   *  Drop the data:text/plain restriction on client_uri.
+
+   *  Rename inline keys from keys to jwks to match OAuth client
+      metadata.
+
+   *  State that jwks_uri points to a JWK Set, without requiring a media
+      type.
+
+   *  Require client_id in a card resolved through its client_id.
+
+   *  Require jwks and jwks_uri to be mutually exclusive.
+
+   *  Restrict registry entries and resolvable cards to https.
+
+   *  Say the jwks_uri resource SHOULD be signed using HTTP Message
+      Signatures.
+
+   *  Note Signature-Key as a possible carrier.
+
+   draft-meunier-webbotauth-registry-02
+
+   *  Add ips_uri so a client can publish IP addresses.
+
+   *  Add jwks_uri to separate key material from metadata.
+
+   *  Fix the inline data URL example.
+
+   *  Rename "Public list" to "Registry Endpoint".
+
+   *  Add authentication guidance for private registry endpoints.
+
+   *  Add conditional GET guidance using ETag and If-Modified-Since.
+
+   *  Add caching guidance using HTTP-CACHE.
+
+   *  Add change notifications using signed PUT and DELETE webhooks.
+
+   *  Keep pull-based registry fetches as the source of truth.
+
+   *  Add registry integrity and private registry guidance to Security
+      Considerations.
+
+   *  Add customer list exposure and access patterns to Privacy
+      Considerations.
+
+   *  Add RFC 8288 as a normative reference.
+
+   draft-meunier-webbotauth-registry-01
+
+
+
+Guerreiro, et al.       Expires 28 December 2026               [Page 25]
+
+Internet-Draft  Registry and Signature Agent card for We       June 2026
+
+
+   *  Add contributors.
+
+   *  Align the registry draft with the OAuth Dynamic Client
+      Registration Metadata registry.
+
+   *  Add an about URL field.
+
+   *  Add ABNF for registry discovery.
+
+   *  Clarify known URLs.
+
+   *  Add a placeholder for image size.
+
+   draft-meunier-webbotauth-registry-00
+
+   *  Initial draft.
+
+Authors' Addresses
+
+   Maxime Guerreiro
+   Cloudflare
+   Email: maxime.guerreiro@gmail.com
+
+
+   Ulas Kirazci
+   Amazon
+   Email: ulaskira@amazon.com
+
+
+   Thibault Meunier
+   Cloudflare
+   Email: ot-ietf@thibault.uk
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Guerreiro, et al.       Expires 28 December 2026               [Page 26]

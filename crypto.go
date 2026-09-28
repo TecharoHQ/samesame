@@ -21,6 +21,21 @@ const (
 	AlgRSAPSSSHA512    = "rsa-pss-sha512"
 )
 
+// MinRSAKeyBits is the smallest RSA modulus accepted for signing or
+// verifying.
+const MinRSAKeyBits = 2048
+
+func checkRSASize(k *rsa.PublicKey) error {
+	if k.N == nil || k.N.BitLen() < MinRSAKeyBits {
+		bits := 0
+		if k.N != nil {
+			bits = k.N.BitLen()
+		}
+		return fmt.Errorf("%w: %d-bit RSA key, need at least %d", ErrUnsupportedKey, bits, MinRSAKeyBits)
+	}
+	return nil
+}
+
 type (
 	newHTTPSigner   func(*httpsign.SignConfig, httpsign.Fields) (*httpsign.Signer, error)
 	newHTTPVerifier func(*httpsign.VerifyConfig, httpsign.Fields) (*httpsign.Verifier, error)
@@ -46,6 +61,9 @@ func signerFunc(key crypto.Signer) (newHTTPSigner, error) {
 			return nil, fmt.Errorf("%w: ECDSA curve %s", ErrUnsupportedKey, k.Curve.Params().Name)
 		}
 	case *rsa.PrivateKey:
+		if err := checkRSASize(&k.PublicKey); err != nil {
+			return nil, err
+		}
 		return func(c *httpsign.SignConfig, f httpsign.Fields) (*httpsign.Signer, error) {
 			return httpsign.NewRSAPSSSigner(*k, c, f)
 		}, nil
@@ -76,6 +94,9 @@ func verifierFunc(pub crypto.PublicKey) (newHTTPVerifier, string, error) {
 			return nil, "", fmt.Errorf("%w: ECDSA curve %s", ErrUnsupportedKey, k.Curve.Params().Name)
 		}
 	case *rsa.PublicKey:
+		if err := checkRSASize(k); err != nil {
+			return nil, "", err
+		}
 		return func(c *httpsign.VerifyConfig, f httpsign.Fields) (*httpsign.Verifier, error) {
 			return httpsign.NewRSAPSSVerifier(*k, c, f)
 		}, AlgRSAPSSSHA512, nil

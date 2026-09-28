@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/dunglas/httpsfv"
-	"github.com/lestrrat-go/jwx/v4/jwk"
 	"github.com/yaronf/httpsign"
 )
 
@@ -103,14 +102,11 @@ func NewSigner(key crypto.Signer, opts SignerOptions) (*Signer, error) {
 		return nil, err
 	}
 
-	pub, err := jwk.Import[jwk.Key](key.Public())
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrUnsupportedKey, err)
-	}
-	keyID, err := Thumbprint(pub)
+	pub, err := PublicJWK(key)
 	if err != nil {
 		return nil, err
 	}
+	keyID, _ := pub.KeyID()
 
 	agent, err := httpsfv.Marshal(httpsfv.NewItem(opts.AgentOrigin))
 	if err != nil {

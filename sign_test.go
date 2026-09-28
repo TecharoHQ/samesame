@@ -39,6 +39,8 @@ func mustGenerate(t *testing.T, name string) crypto.Signer {
 		k, err = ecdsa.GenerateKey(elliptic.P521(), rand.Reader)
 	case "rsa":
 		k, err = rsa.GenerateKey(rand.Reader, 2048)
+	case "rsa1024":
+		k, err = rsa.GenerateKey(rand.Reader, 1024)
 	default:
 		t.Fatalf("unknown key type %q", name)
 	}
@@ -254,6 +256,7 @@ func TestNewSignerErrors(t *testing.T) {
 		{name: "negative expiry", key: "ed25519", opts: SignerOptions{AgentOrigin: testAgentOrigin, Expiry: -time.Minute}, err: ErrSignerConfig},
 		{name: "uppercase label", key: "ed25519", opts: SignerOptions{AgentOrigin: testAgentOrigin, Label: "Sig1"}, err: ErrSignerConfig},
 		{name: "agent key starting with digit", key: "ed25519", opts: SignerOptions{AgentOrigin: testAgentOrigin, AgentKey: "1agent"}, err: ErrSignerConfig},
+		{name: "1024-bit RSA key", key: "rsa1024", opts: SignerOptions{AgentOrigin: testAgentOrigin}, err: ErrUnsupportedKey},
 		{name: "P-521 key", key: "p521", opts: SignerOptions{AgentOrigin: testAgentOrigin}, err: ErrUnsupportedKey},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -377,4 +380,16 @@ func TestSignerTransport(t *testing.T) {
 	// The server sees the request as it arrived, which is what a verifier
 	// sees.
 	verifySigned(t, <-got, priv.Public(), DefaultLabel, DefaultLabel, DefaultExpiry, true)
+}
+
+func TestCryptoFuncsRejectWeakRSA(t *testing.T) {
+	t.Parallel()
+
+	weak := mustGenerate(t, "rsa1024")
+	if _, err := signerFunc(weak); !errors.Is(err, ErrUnsupportedKey) {
+		t.Errorf("signerFunc: want %v, got %v", ErrUnsupportedKey, err)
+	}
+	if _, _, err := verifierFunc(weak.Public()); !errors.Is(err, ErrUnsupportedKey) {
+		t.Errorf("verifierFunc: want %v, got %v", ErrUnsupportedKey, err)
+	}
 }

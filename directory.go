@@ -35,6 +35,54 @@ type Key struct {
 	// honoring them is local policy.
 	NotBefore time.Time
 	Expires   time.Time
+
+	// Set by NewKey so the verifier does not rebuild them per request.
+	newVerifier newHTTPVerifier
+	alg         string
+}
+
+// NewKey validates a public JWK for Web Bot Auth and returns it as a Key
+// with ID set to its thumbprint. It rejects private and symmetric keys and
+// key types or sizes this package cannot verify. KeyResolver
+// implementations should build Directory keys with it.
+func NewKey(k jwk.Key) (Key, error) {
+	if k == nil {
+		return Key{}, fmt.Errorf("%w: nil key", ErrInvalidKey)
+	}
+	if _, ok := k.(jwk.SymmetricKey); ok {
+		return Key{}, fmt.Errorf("%w: symmetric keys are not allowed", ErrInvalidKey)
+	}
+	if isPrivate(k) {
+		return Key{}, fmt.Errorf("%w: contains private key material", ErrInvalidKey)
+	}
+	if err := k.Validate(); err != nil {
+		return Key{}, fmt.Errorf("%w: %w", ErrInvalidKey, err)
+	}
+
+	raw, err := jwk.Export[any](k)
+	if err != nil {
+		return Key{}, fmt.Errorf("%w: %w", ErrInvalidKey, err)
+	}
+	newV, alg, err := verifierFunc(raw)
+	if err != nil {
+		return Key{}, fmt.Errorf("%w: %w", ErrInvalidKey, err)
+	}
+
+	id, err := Thumbprint(k)
+	if err != nil {
+		return Key{}, err
+	}
+
+	return Key{ID: id, JWK: k, newVerifier: newV, alg: alg}, nil
+}
+
+// isPrivate reports whether k carries private key material.
+func isPrivate(k jwk.Key) bool {
+	switch k.(type) {
+	case jwk.RSAPrivateKey, jwk.ECDSAPrivateKey, jwk.OKPPrivateKey:
+		return true
+	}
+	return false
 }
 
 // ValidAt reports whether the key's nbf/exp window contains t.
@@ -108,15 +156,11 @@ func parseDirectoryKey(raw json.RawMessage, opts DirectoryOptions) (Key, error) 
 	var meta struct {
 		Kid *string  `json:"kid"`
 		Use *string  `json:"use"`
-		D   *string  `json:"d"`
 		NBF *float64 `json:"nbf"`
 		EXP *float64 `json:"exp"`
 	}
 	if err := json.Unmarshal(raw, &meta); err != nil {
 		return Key{}, fmt.Errorf("%w: %w", ErrInvalidKey, err)
-	}
-	if meta.D != nil {
-		return Key{}, fmt.Errorf("%w: contains private key material", ErrInvalidKey)
 	}
 	if meta.Use != nil && *meta.Use != string(jwk.ForSignature) {
 		return Key{}, fmt.Errorf("%w: use is %q, not %q", ErrInvalidKey, *meta.Use, jwk.ForSignature)
@@ -126,14 +170,12 @@ func parseDirectoryKey(raw json.RawMessage, opts DirectoryOptions) (Key, error) 
 	if err != nil {
 		return Key{}, fmt.Errorf("%w: %w", ErrInvalidKey, err)
 	}
-	if err := k.Validate(); err != nil {
-		return Key{}, fmt.Errorf("%w: %w", ErrInvalidKey, err)
-	}
 
-	id, err := Thumbprint(k)
+	result, err := NewKey(k)
 	if err != nil {
 		return Key{}, err
 	}
+	id := result.ID
 
 	// Protocol draft Section 5.5: a kid in a well-known directory MUST be the
 	// thumbprint.
@@ -145,7 +187,6 @@ func parseDirectoryKey(raw json.RawMessage, opts DirectoryOptions) (Key, error) 
 		return Key{}, fmt.Errorf("%w: %s", ErrTestKey, knownTestKeys[id])
 	}
 
-	result := Key{ID: id, JWK: k}
 	if meta.NBF != nil {
 		result.NotBefore = time.Unix(int64(*meta.NBF), 0)
 	}

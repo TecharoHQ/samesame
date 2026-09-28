@@ -55,11 +55,11 @@ func directoryOf(t *testing.T, pubs ...crypto.PublicKey) *Directory {
 		if err != nil {
 			t.Fatalf("jwk.Import: %v", err)
 		}
-		id, err := Thumbprint(k)
+		key, err := NewKey(k)
 		if err != nil {
-			t.Fatalf("Thumbprint: %v", err)
+			t.Fatalf("NewKey: %v", err)
 		}
-		d.Keys = append(d.Keys, Key{ID: id, JWK: k})
+		d.Keys = append(d.Keys, key)
 	}
 	return &d
 }
@@ -471,6 +471,16 @@ func TestVerify(t *testing.T) {
 			wantOutcome: OutcomeVerified,
 		},
 		{
+			// A custom KeyResolver may build Keys without NewKey.
+			name: "hand-built directory key",
+			opts: VerifierOptions{Resolver: mapResolver{dirs: map[string]*Directory{
+				testAgentIdentifier: {Keys: []Key{{ID: keyID, JWK: directoryOf(t, key.Public()).Keys[0].JWK}}},
+			}}},
+			request:        func(t *testing.T) *http.Request { return sign(t, SignerOptions{}) },
+			wantOutcome:    OutcomeVerified,
+			wantIdentifier: true,
+		},
+		{
 			name:        "key not in directory",
 			opts:        VerifierOptions{Resolver: mapResolver{dirs: map[string]*Directory{testAgentIdentifier: directoryOf(t, other.Public())}}},
 			request:     func(t *testing.T) *http.Request { return sign(t, SignerOptions{}) },
@@ -712,5 +722,5 @@ func ed25519Public() (Key, error) {
 	if err != nil {
 		return Key{}, err
 	}
-	return Key{ID: testEd25519KeyID, JWK: k}, nil
+	return NewKey(k)
 }

@@ -1,8 +1,13 @@
 package samesame
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"strings"
 	"testing"
 	"time"
@@ -120,6 +125,35 @@ func TestParseDirectory(t *testing.T) {
 			wantErrIn:   ErrInvalidKey,
 		},
 		{
+			name:        "symmetric key",
+			input:       `{"keys":[{"kty":"oct","k":"c2VjcmV0c2VjcmV0c2VjcmV0c2VjcmV0"}]}`,
+			wantInvalid: 1,
+			wantErrIn:   ErrInvalidKey,
+		},
+		{
+			name:        "P-521 key",
+			input:       `{"keys":[` + jwkJSON(t, mustGenerate(t, "p521").Public()) + `]}`,
+			wantInvalid: 1,
+			wantErrIn:   ErrUnsupportedKey,
+		},
+		{
+			name:        "1024-bit RSA key",
+			input:       `{"keys":[` + rsaPublicJWK(mustGenerateRSA(t, 1024)) + `]}`,
+			wantInvalid: 1,
+			wantErrIn:   ErrInvalidKey,
+		},
+		{
+			name:     "2048-bit RSA key",
+			input:    `{"keys":[` + jwkJSON(t, mustGenerateRSA(t, 2048).Public()) + `]}`,
+			wantKeys: 1,
+		},
+		{
+			name:        "private RSA key",
+			input:       `{"keys":[` + jwkJSON(t, mustGenerateRSA(t, 2048)) + `]}`,
+			wantInvalid: 1,
+			wantErrIn:   ErrInvalidKey,
+		},
+		{
 			name:        "encryption key",
 			input:       `{"keys":[{"kty":"EC","crv":"P-256","use":"enc","x":"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU","y":"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"}]}`,
 			wantInvalid: 1,
@@ -225,6 +259,91 @@ func TestDirectoryKeyValidity(t *testing.T) {
 			_, ok := dir.Key(tt.id, tt.now)
 			if ok != tt.want {
 				t.Errorf("want %v, got %v", tt.want, ok)
+			}
+		})
+	}
+}
+
+// jwkJSON serializes a raw key as a JWK.
+func jwkJSON(t *testing.T, raw any) string {
+	t.Helper()
+
+	k, err := jwk.Import[jwk.Key](raw)
+	if err != nil {
+		t.Fatalf("jwk.Import: %v", err)
+	}
+	data, err := json.Marshal(k)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	return string(data)
+}
+
+// rsaPublicJWK serializes an RSA public key by hand, because jwx refuses to
+// import keys under 2048 bits.
+func rsaPublicJWK(k *rsa.PrivateKey) string {
+	b64 := base64.RawURLEncoding.EncodeToString
+	return fmt.Sprintf(`{"kty":"RSA","n":"%s","e":"%s"}`,
+		b64(k.N.Bytes()), b64(big.NewInt(int64(k.E)).Bytes()))
+}
+
+func mustGenerateRSA(t *testing.T, bits int) *rsa.PrivateKey {
+	t.Helper()
+
+	k, err := rsa.GenerateKey(rand.Reader, bits)
+	if err != nil {
+		t.Fatalf("rsa.GenerateKey: %v", err)
+	}
+	return k
+}
+
+func TestNewKey(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name string
+		key  func(t *testing.T) jwk.Key
+		err  error
+	}{
+		{
+			name: "ed25519 public",
+			key: func(t *testing.T) jwk.Key {
+				k, _ := jwk.ParseKey([]byte(testEd25519JWK))
+				return k
+			},
+		},
+		{
+			name: "ed25519 private",
+			key: func(t *testing.T) jwk.Key {
+				k, err := jwk.Import[jwk.Key](mustGenerate(t, "ed25519"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				return k
+			},
+			err: ErrInvalidKey,
+		},
+		{
+			name: "nil",
+			key:  func(t *testing.T) jwk.Key { return nil },
+			err:  ErrInvalidKey,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			k, err := NewKey(tt.key(t))
+			if tt.err != nil {
+				if !errors.Is(err, tt.err) {
+					t.Errorf("want %v, got %v", tt.err, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("NewKey: %v", err)
+			}
+			if k.newVerifier == nil || k.alg == "" {
+				t.Error("NewKey did not cache the verifier")
 			}
 		})
 	}

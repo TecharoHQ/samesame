@@ -142,17 +142,14 @@ func NewVerifier(opts VerifierOptions) (*Verifier, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%w: static key %d: %w", ErrUnsupportedKey, i, err)
 		}
-		if _, _, err := verifierFunc(pub); err != nil {
-			return nil, fmt.Errorf("static key %d: %w", i, err)
-		}
-		id, err := Thumbprint(k)
+		key, err := NewKey(k)
 		if err != nil {
 			return nil, fmt.Errorf("static key %d: %w", i, err)
 		}
-		if !opts.AllowTestKeys && IsTestKey(id) {
-			return nil, fmt.Errorf("static key %d: %w: %s", i, ErrTestKey, knownTestKeys[id])
+		if !opts.AllowTestKeys && IsTestKey(key.ID) {
+			return nil, fmt.Errorf("static key %d: %w: %s", i, ErrTestKey, knownTestKeys[key.ID])
 		}
-		static[id] = Key{ID: id, JWK: k}
+		static[key.ID] = key
 	}
 
 	return &Verifier{opts: opts, static: static}, nil
@@ -313,14 +310,16 @@ func (v *Verifier) verifyOne(r *http.Request, sigInputs *httpsfv.Dictionary, age
 		return nil, verr
 	}
 
-	raw, err := jwk.Export[any](key.JWK)
-	if err != nil {
-		return nil, unverified(label, fmt.Errorf("%w: can't export key: %w", ErrKeyUnknown, err))
+	if key.newVerifier == nil {
+		// Built by hand rather than with NewKey, e.g. by a custom
+		// KeyResolver.
+		k, err := NewKey(key.JWK)
+		if err != nil {
+			return nil, unverified(label, fmt.Errorf("%w: %w", ErrKeyUnknown, err))
+		}
+		key.newVerifier, key.alg = k.newVerifier, k.alg
 	}
-	newV, alg, err := verifierFunc(raw)
-	if err != nil {
-		return nil, unverified(label, fmt.Errorf("%w: %w", ErrKeyUnknown, err))
-	}
+	newV, alg := key.newVerifier, key.alg
 
 	fields := httpsign.NewFields()
 	if cov.authority {

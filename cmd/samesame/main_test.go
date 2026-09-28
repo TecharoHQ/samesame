@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/TecharoHQ/samesame"
 )
@@ -297,5 +300,132 @@ func TestPublicKeyFormats(t *testing.T) {
 				t.Errorf("want %s, got %s", keyID, got)
 			}
 		})
+	}
+}
+
+func TestDirectorySignFor(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	key := filepath.Join(dir, "bot.key")
+	keyID := strings.TrimSpace(mustRun(t, "keygen", "--out", key))
+
+	for _, tt := range []struct {
+		name        string
+		format      string
+		wantNginx   bool
+		wantCaddy   bool
+		extraArgs   []string
+		wantMaxAge  string
+		wantExpires time.Duration
+	}{
+		{name: "both", format: "both", wantNginx: true, wantCaddy: true, wantMaxAge: "max-age=3600", wantExpires: samesame.DefaultDirectorySignatureLifetime},
+		{name: "nginx", format: "nginx", wantNginx: true, wantMaxAge: "max-age=3600", wantExpires: samesame.DefaultDirectorySignatureLifetime},
+		{
+			name: "caddy with custom lifetimes", format: "caddy", wantCaddy: true,
+			extraArgs: []string{"--lifetime", "2160h", "--max-age", "10m"}, wantMaxAge: "max-age=600", wantExpires: 2160 * time.Hour,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			out := filepath.Join(t.TempDir(), "http-message-signatures-directory")
+			args := append([]string{"directory", key, "--sign-for", "Bot.Example", "--format", tt.format, "--out", out}, tt.extraArgs...)
+			conf := mustRun(t, args...)
+
+			// The body is written exactly, with no trailing newline, since
+			// Content-Digest covers these bytes.
+			body, err := os.ReadFile(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			priv, err := samesame.ParsePrivateKeyPEM(data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, err := samesame.MarshalDirectory(priv.Public())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(body) != string(want) {
+				t.Errorf("body is not byte for byte the directory:\n%q\n%q", body, want)
+			}
+
+			sum := sha256.Sum256(body)
+			digest := "sha-256=:" + base64.StdEncoding.EncodeToString(sum[:]) + ":"
+
+			if got := strings.Contains(conf, "location = "+samesame.WellKnownPath); got != tt.wantNginx {
+				t.Errorf("nginx block present = %v, want %v", got, tt.wantNginx)
+			}
+			if got := strings.Contains(conf, "handle "+samesame.WellKnownPath); got != tt.wantCaddy {
+				t.Errorf("caddy block present = %v, want %v", got, tt.wantCaddy)
+			}
+
+			for _, want := range []string{
+				digest,
+				`keyid="` + keyID + `"`,
+				`("@authority";req "content-digest")`,
+				`tag="http-message-signatures-directory"`,
+				tt.wantMaxAge,
+				samesame.MediaTypeDirectory,
+				// Hosts are lowercased: the signature binds the canonical
+				// authority.
+				"block for bot.example.",
+			} {
+				if !strings.Contains(conf, want) {
+					t.Errorf("config is missing %q:\n%s", want, conf)
+				}
+			}
+			if tt.wantNginx && (!strings.Contains(conf, "gzip off;") || !strings.Contains(conf, "alias "+out+";")) {
+				t.Errorf("nginx block must disable gzip and alias the file:\n%s", conf)
+			}
+			if tt.wantCaddy && !strings.Contains(conf, "encode @compress") {
+				t.Errorf("caddy block must explain excluding the path from encode:\n%s", conf)
+			}
+
+			// The expiry comment reflects --lifetime.
+			wantExp := time.Now().Add(tt.wantExpires).UTC().Format("2006-01-02")
+			if !strings.Contains(conf, "expire at "+wantExp) {
+				t.Errorf("config does not say the signatures expire on %s:\n%s", wantExp, conf)
+			}
+		})
+	}
+}
+
+func TestDirectorySignForErrors(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	key := filepath.Join(dir, "bot.key")
+	mustRun(t, "keygen", "--out", key)
+	pub := filepath.Join(dir, "bot.pub")
+	writePublicPEM(t, key, pub)
+	out := filepath.Join(dir, "out")
+
+	for _, tt := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "no --out", args: []string{"directory", key, "--sign-for", "bot.example"}, want: "--out"},
+		{name: "--pretty", args: []string{"directory", key, "--sign-for", "bot.example", "--out", out, "--pretty"}, want: "--pretty"},
+		{name: "public key", args: []string{"directory", pub, "--sign-for", "bot.example", "--out", out}, want: "private key"},
+		{name: "unknown format", args: []string{"directory", key, "--sign-for", "bot.example", "--out", out, "--format", "apache"}, want: "unknown format"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := run(t, tt.args...)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("want an error mentioning %q, got %v", tt.want, err)
+			}
+		})
+	}
+	if _, err := os.Stat(out); err == nil {
+		t.Error("a failed run wrote the output file")
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -103,7 +104,12 @@ func directoryCommand() *cli.Command {
 			samesame.WellKnownPath + " with media type\n" +
 			samesame.MediaTypeDirectory + ".\n" +
 			"Only public keys are included. List several keys to publish a new key\n" +
-			"before rotating to it. Keys may be private or public PEM files.",
+			"before rotating to it. Keys may be private or public PEM files.\n\n" +
+			"With --sign-for, the directory is written to --out exactly as it must be\n" +
+			"served, and nginx and Caddy config is printed that serves it with the\n" +
+			"media type, Content-Digest, and one directory response signature per\n" +
+			"key for each host. This needs private keys. The signatures expire after\n" +
+			"--lifetime, so run the command again before then.",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:    "out",
@@ -112,12 +118,41 @@ func directoryCommand() *cli.Command {
 			},
 			&cli.BoolFlag{
 				Name:  "pretty",
-				Usage: "indent the JSON",
+				Usage: "indent the JSON (not with --sign-for)",
+			},
+			&cli.StringSliceFlag{
+				Name:  "sign-for",
+				Usage: "host verifiers fetch the directory from, such as bot.example; repeat for several",
+			},
+			&cli.DurationFlag{
+				Name:  "lifetime",
+				Value: samesame.DefaultDirectorySignatureLifetime,
+				Usage: "how long the directory signatures stay valid, with --sign-for",
+			},
+			&cli.DurationFlag{
+				Name:  "max-age",
+				Value: samesame.DefaultDirectoryMaxAge,
+				Usage: "Cache-Control max-age to send, with --sign-for",
+			},
+			&cli.StringFlag{
+				Name:  "format",
+				Value: formatBoth,
+				Usage: "server config to print with --sign-for: nginx, caddy, or both",
+				Validator: func(f string) error {
+					switch f {
+					case formatNginx, formatCaddy, formatBoth:
+						return nil
+					}
+					return fmt.Errorf("unknown format %q, use nginx, caddy, or both", f)
+				},
 			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			if cmd.Args().Len() == 0 {
 				return errors.New("directory: at least one key file is required")
+			}
+			if hosts := cmd.StringSlice("sign-for"); len(hosts) != 0 {
+				return signedDirectory(cmd, hosts)
 			}
 
 			var pubs []crypto.PublicKey
@@ -149,6 +184,75 @@ func directoryCommand() *cli.Command {
 			return err
 		},
 	}
+}
+
+// signedDirectory writes the directory to --out and prints server config
+// that serves it with directory response signatures for each host.
+func signedDirectory(cmd *cli.Command, hosts []string) error {
+	out := cmd.String("out")
+	if out == "" {
+		return errors.New("directory: --sign-for needs --out, the file the server will serve")
+	}
+	if cmd.Bool("pretty") {
+		return errors.New("directory: --pretty changes the bytes Content-Digest covers, so it can't be used with --sign-for")
+	}
+	abs, err := filepath.Abs(out)
+	if err != nil {
+		return err
+	}
+
+	var keys []crypto.Signer
+	for _, path := range cmd.Args().Slice() {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		key, err := samesame.ParsePrivateKeyPEM(data)
+		if err != nil {
+			return fmt.Errorf("%s: signing needs the private key: %w", path, err)
+		}
+		keys = append(keys, key)
+	}
+
+	opts := samesame.DirectoryHandlerOptions{
+		MaxAge:            cmd.Duration("max-age"),
+		SignatureLifetime: cmd.Duration("lifetime"),
+	}
+
+	var body []byte
+	w := cmd.Root().Writer
+	for i, host := range hosts {
+		// Signatures bind the canonical, lowercase authority.
+		host = strings.ToLower(host)
+		sd, err := samesame.SignStaticDirectory(keys, host, opts)
+		if err != nil {
+			return fmt.Errorf("%s: %w", host, err)
+		}
+		// The body does not depend on the host.
+		body = sd.Body
+
+		if i > 0 {
+			fmt.Fprintln(w)
+		}
+		format := cmd.String("format")
+		if format == formatNginx || format == formatBoth {
+			if err := writeNginx(w, host, abs, sd); err != nil {
+				return err
+			}
+		}
+		if format == formatBoth {
+			fmt.Fprintln(w)
+		}
+		if format == formatCaddy || format == formatBoth {
+			if err := writeCaddy(w, host, abs, sd); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Written exactly, with no trailing newline: Content-Digest covers
+	// these bytes.
+	return os.WriteFile(out, body, 0o644)
 }
 
 func keyIDCommand() *cli.Command {

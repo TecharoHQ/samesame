@@ -123,13 +123,47 @@ samesame keyid bot.key next.key
 ```
 
 `samesame directory` prints the same JSON that `NewDirectoryHandler` serves.
-If you serve the file from somewhere else, send it with the media type
-`application/http-message-signatures-directory+json`. A static file cannot
-carry the directory response signatures that the handler adds. Verifiers
-are allowed to use keys without those signatures.
+
+### Serving the directory as a static file
+
+To serve the directory from nginx or Caddy instead of `NewDirectoryHandler`,
+use `--sign-for`:
+
+```sh
+samesame directory bot.key next.key \
+	--sign-for bot.example \
+	--out /srv/www/http-message-signatures-directory
+```
+
+This writes the directory to `--out` exactly as it must be served. It then
+prints an nginx `location` block and a Caddy `handle` block that serve that
+file with:
+
+- the media type `application/http-message-signatures-directory+json`;
+- `Cache-Control` (set with `--max-age`);
+- `Content-Digest`;
+- one directory response signature per key.
+
+Use `--format nginx` or `--format caddy` to print only one of them.
+
+These signatures prove that you hold the keys. Some verifiers require them,
+for example Cloudflare. They cover only the host and the body, so they can
+be static headers. Keep these points in mind:
+
+- The signatures expire after `--lifetime` (default 30 days). The printed
+  config shows the exact time. Run the command again before then, and every
+  time the keys change.
+- Give every host that verifiers use to reach the directory as its own
+  `--sign-for`. A signature for one host does not work for another host.
+- Do not compress this file. `Content-Digest` covers the exact bytes that
+  the server sends. The nginx block turns gzip off. If your Caddy site uses
+  `encode`, limit it to other paths, as the printed comment shows.
+- In nginx, an `add_header` in the `location` block replaces the
+  `add_header` directives that the `server` block would give it.
 
 In Go, the same operations are `GenerateKey`, `MarshalPrivateKeyPEM`,
-`ParsePrivateKeyPEM`, `PublicJWK`, and `MarshalDirectory`.
+`ParsePrivateKeyPEM`, `PublicJWK`, `MarshalDirectory`, and
+`SignStaticDirectory`.
 
 ## Not supported yet
 

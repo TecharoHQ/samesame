@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -21,6 +22,9 @@ MCowBQYDK2VwAyEAJrQLj5P/89iXES9+vFgrIy29clF9CC/oPPsw3c5D0bs=
 	testEd25519Private = `-----BEGIN PRIVATE KEY-----
 MC4CAQAwBQYDK2VwBCIEIJ+DYvh6SEqVTm50DFtMDoQikTmiCqirVv9mWG9qfSnF
 -----END PRIVATE KEY-----`
+
+	// testEd25519KeyID is the RFC 8037 thumbprint of the key above.
+	testEd25519KeyID = "poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U"
 )
 
 func loadEd25519(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
@@ -41,9 +45,9 @@ func loadEd25519(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
 	return pub.(ed25519.PublicKey), priv.(ed25519.PrivateKey)
 }
 
-// Step 0 spike: confirm httpsign handles the web-bot-auth architecture draft
-// Appendix A.2 test vectors.
-func TestSpikeArchitectureVectors(t *testing.T) {
+// Step 0 spike: confirm httpsign handles the httpsig-protocol-00 Appendix E.2
+// request vectors.
+func TestSpikeProtocolVectors(t *testing.T) {
 	pub, _ := loadEd25519(t)
 
 	for _, tt := range []struct {
@@ -55,18 +59,15 @@ func TestSpikeArchitectureVectors(t *testing.T) {
 		fields         httpsign.Fields
 	}{
 		{
-			name:           "A.2.1 no Signature-Agent",
-			label:          "sig1",
-			signatureInput: `sig1=("@authority");created=1735689600;keyid="poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U";alg="ed25519";expires=1735693200;nonce="mYotfW3CUjI68sbGw6oKd7kyXqPjZEtU8xFPGWFrqOAf5qC6MDe3pys3SWWCudB0MvwslHy32WXUpkR7u0lt/w==";tag="web-bot-auth"`,
-			signature:      `sig1=:+NA/cssf4Y2bQTMTkyvTGRCaVzp9quyUevdwwMtMOWhhOOZ2T1subBj0BtvdnrpDEuwSAbiTeElXDzHL3WWKCw==:`,
-			fields:         httpsign.Headers("@authority"),
+			name:           "E.2.1 dictionary Signature-Agent",
+			label:          "sig2",
+			signatureAgent: `agent2="https://signature-agent.test"`,
+			signatureInput: `sig2=("@authority" "signature-agent";key="agent2");created=1735689600;keyid="poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U";alg="ed25519";expires=4889289600;nonce="n9p433xm+NJ3ph3upfBIGmsuwHw387YV7Q/F+6BSpGCVjYCqQw6rznNA8PVVLySrAWsv0hQtFioQb6E1YsauiA==";tag="web-bot-auth"`,
+			signature:      `sig2=:RdNFx5Bj6au3YgAMQL/RzmUlZE8QZLIaXGRpw985hWnwPfMxT228NMk6ehRS1PSl4e8PhbNZACSanGdhEwYCCg==:`,
+			fields:         *httpsign.NewFields().AddHeader("@authority").AddDictHeader("signature-agent", "agent2"),
 		},
 		{
-			// The -04 draft prints this vector with the dictionary form of
-			// Signature-Agent ("signature-agent";key="sig2"), but the signature
-			// bytes were computed over the older string form. This is the form
-			// the signature actually verifies against.
-			name:           "A.2.2 with Signature-Agent (legacy string form)",
+			name:           "E.2.2 legacy string Signature-Agent",
 			label:          "sig2",
 			signatureAgent: `"https://signature-agent.test"`,
 			signatureInput: `sig2=("@authority" "signature-agent");created=1735689600;keyid="poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U";alg="ed25519";expires=1735693200;nonce="e8N7S2MFd/qrd6T2R3tdfAuuANngKI7LFtKYI/vowzk4lAZYadIX6wW25MwG7DCT9RUKAJ0qVkU0mEeLElW1qg==";tag="web-bot-auth"`,
@@ -78,18 +79,16 @@ func TestSpikeArchitectureVectors(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "https://example.com/", nil)
 			req.Header.Set("Signature-Input", tt.signatureInput)
 			req.Header.Set("Signature", tt.signature)
-			if tt.signatureAgent != "" {
-				req.Header.Set("Signature-Agent", tt.signatureAgent)
-			}
+			req.Header.Set("Signature-Agent", tt.signatureAgent)
 
-			details, err := httpsign.RequestDetailsByTag(req, "web-bot-auth")
+			details, err := httpsign.RequestDetailsByTag(req, TagWebBotAuth)
 			if err != nil {
 				t.Fatalf("RequestDetailsByTag: %v", err)
 			}
 			if details.Label != tt.label {
 				t.Errorf("label: want %q, got %q", tt.label, details.Label)
 			}
-			if details.KeyID == nil || *details.KeyID != "poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U" {
+			if details.KeyID == nil || *details.KeyID != testEd25519KeyID {
 				t.Errorf("keyid: got %v", details.KeyID)
 			}
 			if details.Nonce == nil || details.Expires == nil || details.Created == nil {
@@ -99,7 +98,7 @@ func TestSpikeArchitectureVectors(t *testing.T) {
 			cfg := httpsign.NewVerifyConfig().
 				SetVerifyCreated(false).
 				SetRejectExpired(false).
-				SetAllowedTags([]string{"web-bot-auth"})
+				SetAllowedTags([]string{TagWebBotAuth})
 			v, err := httpsign.NewEd25519Verifier(pub, cfg, tt.fields)
 			if err != nil {
 				t.Fatalf("NewEd25519Verifier: %v", err)
@@ -118,11 +117,11 @@ func TestSpikeDictMemberBase(t *testing.T) {
 	pub, priv := loadEd25519(t)
 
 	req := httptest.NewRequest(http.MethodGet, "https://example.com/", nil)
-	req.Header.Set("Signature-Agent", `sig2="https://signature-agent.test"`)
+	req.Header.Set("Signature-Agent", `agent2="https://signature-agent.test"`)
 
 	signer, err := httpsign.NewEd25519Signer(priv,
-		httpsign.NewSignConfig().SetTag("web-bot-auth").SetKeyID("k").SetExpires(1735693200),
-		*httpsign.NewFields().AddHeader("@authority").AddDictHeader("signature-agent", "sig2"))
+		httpsign.NewSignConfig().SetTag(TagWebBotAuth).SetKeyID("k").SetExpires(1735693200),
+		*httpsign.NewFields().AddHeader("@authority").AddDictHeader("signature-agent", "agent2"))
 	if err != nil {
 		t.Fatalf("NewEd25519Signer: %v", err)
 	}
@@ -134,7 +133,7 @@ func TestSpikeDictMemberBase(t *testing.T) {
 
 	params := strings.TrimPrefix(sigInput, "sig2=")
 	base := "\"@authority\": example.com\n" +
-		"\"signature-agent\";key=\"sig2\": \"https://signature-agent.test\"\n" +
+		"\"signature-agent\";key=\"agent2\": \"https://signature-agent.test\"\n" +
 		"\"@signature-params\": " + params
 
 	raw, err := base64.StdEncoding.DecodeString(strings.TrimSuffix(strings.TrimPrefix(sig, "sig2=:"), ":"))
@@ -147,48 +146,44 @@ func TestSpikeDictMemberBase(t *testing.T) {
 	}
 }
 
-// Step 0 spike: confirm httpsign can sign and verify a response covering
-// "@authority";req, which the directory draft needs.
-func TestSpikeResponseReqFlag(t *testing.T) {
-	pub, priv := loadEd25519(t)
+// Step 0 spike: confirm httpsign verifies the httpsig-protocol-00 E.2.3 signed
+// directory response, which covers "@authority";req and content-digest.
+func TestSpikeDirectoryResponseVector(t *testing.T) {
+	pub, _ := loadEd25519(t)
 
-	req := httptest.NewRequest(http.MethodGet, "https://example.com/.well-known/http-message-signatures-directory", nil)
+	const body = `{"keys":[{"kty":"OKP","crv":"Ed25519","kid":"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U","x":"JrQLj5P_89iXES9-vFgrIy29clF9CC_oPPsw3c5D0bs","use":"sig"}]}`
+
+	req := httptest.NewRequest(http.MethodGet, "https://signature-agent.test"+WellKnownPath, nil)
 	res := &http.Response{
 		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"application/http-message-signatures-directory+json"}},
-		Request:    req,
+		Header: http.Header{
+			"Content-Type":    []string{MediaTypeDirectory},
+			"Content-Digest":  []string{"sha-256=:CADMT2aBdV/rqQr/NIru64ERQkCobVvllA4V0fLFDu0=:"},
+			"Signature-Input": []string{`binding=("@authority";req "content-digest");created=1735689600;expires=4889289600;keyid="poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U";tag="http-message-signatures-directory"`},
+			"Signature":       []string{"binding=:l6P8R67tm3kujAxbHWio7ll01qrEZ0dKD/WWlGhNYEmTnFZM8Wt0VQ9zqGfvo7T/UMkBxsigzChM1Gpz7gOVBg==:"},
+		},
+		Body:    io.NopCloser(strings.NewReader(body)),
+		Request: req,
 	}
 
-	fields := *httpsign.NewFields().AddRequestComponent("@authority")
-
-	signer, err := httpsign.NewEd25519Signer(priv,
-		httpsign.NewSignConfig().SetTag("http-message-signatures-directory").SetExpiresAfter(60).SetKeyID("test"),
-		fields)
-	if err != nil {
-		t.Fatalf("NewEd25519Signer: %v", err)
+	if err := httpsign.ValidateContentDigestHeader(res.Header.Values("Content-Digest"), &res.Body, []string{httpsign.DigestSha256}); err != nil {
+		t.Fatalf("ValidateContentDigestHeader: %v", err)
 	}
 
-	sigInput, sig, err := httpsign.SignResponse("binding0", *signer, res, req)
-	if err != nil {
-		t.Fatalf("SignResponse: %v", err)
-	}
-	t.Logf("Signature-Input: %s", sigInput)
-	res.Header.Set("Signature-Input", sigInput)
-	res.Header.Set("Signature", sig)
-
+	fields := *httpsign.NewFields().AddRequestComponent("@authority").AddHeader("content-digest")
 	v, err := httpsign.NewEd25519Verifier(pub,
-		httpsign.NewVerifyConfig().SetAllowedTags([]string{"http-message-signatures-directory"}),
+		httpsign.NewVerifyConfig().SetVerifyCreated(false).SetAllowedTags([]string{TagDirectory}),
 		fields)
 	if err != nil {
 		t.Fatalf("NewEd25519Verifier: %v", err)
 	}
 
-	if err := httpsign.VerifyResponse("binding0", *v, res, req); err != nil {
+	if err := httpsign.VerifyResponse("binding", *v, res, req); err != nil {
 		t.Fatalf("VerifyResponse: %v", err)
 	}
 
-	otherReq := httptest.NewRequest(http.MethodGet, "https://evil.example/.well-known/http-message-signatures-directory", nil)
-	if err := httpsign.VerifyResponse("binding0", *v, res, otherReq); err == nil {
+	otherReq := httptest.NewRequest(http.MethodGet, "https://evil.example"+WellKnownPath, nil)
+	if err := httpsign.VerifyResponse("binding", *v, res, otherReq); err == nil {
 		t.Fatal("VerifyResponse succeeded against a different @authority")
 	}
 }

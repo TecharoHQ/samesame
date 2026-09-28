@@ -183,8 +183,8 @@ func keyIDCommand() *cli.Command {
 	}
 }
 
-// readPublicKey reads a private or public key PEM file and returns the
-// public key.
+// readPublicKey reads a private key PEM file, or a PKIX or PKCS #1 public
+// key PEM file, and returns the public key.
 func readPublicKey(path string) (crypto.PublicKey, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -192,14 +192,30 @@ func readPublicKey(path string) (crypto.PublicKey, error) {
 	}
 
 	block, _ := pem.Decode(data)
-	if block != nil && block.Type == "PUBLIC KEY" {
-		pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if block != nil {
+		var (
+			pub crypto.PublicKey
+			err error
+		)
+		switch block.Type {
+		case "PUBLIC KEY":
+			pub, err = x509.ParsePKIXPublicKey(block.Bytes)
+		case "RSA PUBLIC KEY":
+			pub, err = x509.ParsePKCS1PublicKey(block.Bytes)
+		default:
+			return privateToPublic(path, data)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", path, err)
 		}
 		return pub, nil
 	}
 
+	return privateToPublic(path, data)
+}
+
+// privateToPublic parses a private key PEM file and returns its public key.
+func privateToPublic(path string, data []byte) (crypto.PublicKey, error) {
 	key, err := samesame.ParsePrivateKeyPEM(data)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)

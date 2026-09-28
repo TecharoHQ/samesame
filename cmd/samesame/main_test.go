@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
 	"os"
@@ -254,5 +255,47 @@ func writePublicPEM(t *testing.T, src, dst string) {
 	}
 	if err := os.WriteFile(dst, pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPublicKeyFormats(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	priv := filepath.Join(dir, "rsa.pem")
+	keyID := strings.TrimSpace(mustRun(t, "keygen", "--alg", samesame.AlgRSAPSSSHA512, "--out", priv))
+
+	data, err := os.ReadFile(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := samesame.ParsePrivateKeyPEM(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rsaPub := key.Public().(*rsa.PublicKey)
+	pkix, err := x509.MarshalPKIXPublicKey(rsaPub)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tt := range []struct {
+		name  string
+		block *pem.Block
+	}{
+		{name: "PKIX PUBLIC KEY", block: &pem.Block{Type: "PUBLIC KEY", Bytes: pkix}},
+		{name: "PKCS #1 RSA PUBLIC KEY", block: &pem.Block{Type: "RSA PUBLIC KEY", Bytes: x509.MarshalPKCS1PublicKey(rsaPub)}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "pub.pem")
+			if err := os.WriteFile(path, pem.EncodeToMemory(tt.block), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.TrimSpace(mustRun(t, "keyid", path)); got != keyID {
+				t.Errorf("want %s, got %s", keyID, got)
+			}
+		})
 	}
 }

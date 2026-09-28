@@ -4,7 +4,6 @@ import (
 	"crypto"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lestrrat-go/jwx/v4/jwk"
 	"github.com/yaronf/httpsign"
 )
 
@@ -68,40 +66,28 @@ func NewDirectoryHandler(keys []crypto.Signer, opts DirectoryHandlerOptions) (ht
 
 	h := &directoryHandler{maxAge: opts.MaxAge, lifetime: opts.SignatureLifetime}
 
-	var jwks []jwk.Key
+	pubs := make([]crypto.PublicKey, 0, len(keys))
 	for i, key := range keys {
 		newS, err := signerFunc(key)
 		if err != nil {
 			return nil, fmt.Errorf("key %d: %w", i, err)
 		}
-
-		// Import only the public half so private material can never be
-		// served.
-		pub, err := jwk.Import[jwk.Key](key.Public())
-		if err != nil {
-			return nil, fmt.Errorf("%w: key %d: %w", ErrUnsupportedKey, i, err)
-		}
-		id, err := Thumbprint(pub)
+		k, err := PublicJWK(key)
 		if err != nil {
 			return nil, fmt.Errorf("key %d: %w", i, err)
 		}
-		if err := pub.Set(jwk.KeyIDKey, id); err != nil {
-			return nil, fmt.Errorf("key %d: can't set kid: %w", i, err)
-		}
-		if err := pub.Set(jwk.KeyUsageKey, jwk.ForSignature); err != nil {
-			return nil, fmt.Errorf("key %d: can't set use: %w", i, err)
-		}
+		id, _ := k.KeyID()
 
-		jwks = append(jwks, pub)
+		pubs = append(pubs, key.Public())
 		h.keyIDs = append(h.keyIDs, id)
 		h.newSigner = append(h.newSigner, newS)
 	}
 
-	body, err := json.Marshal(struct {
-		Keys []jwk.Key `json:"keys"`
-	}{jwks})
+	// MarshalDirectory exports only the public halves, so private material
+	// can never be served.
+	body, err := MarshalDirectory(pubs...)
 	if err != nil {
-		return nil, fmt.Errorf("samesame: can't serialize directory: %w", err)
+		return nil, err
 	}
 	h.body = body
 

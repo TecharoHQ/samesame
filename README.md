@@ -62,6 +62,18 @@ other non-public addresses. It also limits size, time, and concurrency. It
 caches directories using the response's caching headers. If a refresh
 fails, the fetcher keeps the last good directory.
 
+`FetcherOptions.DirectorySignatures` controls directory response
+signatures:
+
+- `DirectorySignaturesPrefer` (default): an unsigned directory is
+  accepted. If the directory has signatures, each key must have a valid
+  signature, or the fetcher drops it.
+- `DirectorySignaturesRequire`: the fetcher drops each key that does not
+  have a valid signature. All keys from an unsigned directory are dropped.
+- `DirectorySignaturesIgnore`: the fetcher does not check signatures.
+
+Dropped keys are in `Directory.Invalid` with `ErrDirectoryUnbound`.
+
 ## Signing requests
 
 ```go

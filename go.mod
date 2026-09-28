@@ -4,12 +4,14 @@ go 1.27.0
 
 tool golang.org/x/tools/cmd/goimports
 
-require github.com/yaronf/httpsign v0.6.1
+require (
+	github.com/lestrrat-go/jwx/v4 v4.5.0
+	github.com/yaronf/httpsign v0.6.1
+)
 
 require (
 	github.com/dunglas/httpsfv v1.1.1 // indirect
 	github.com/lestrrat-go/dsig v1.4.0 // indirect
-	github.com/lestrrat-go/jwx/v4 v4.5.0 // indirect
 	github.com/lestrrat-go/option/v3 v3.0.0-alpha1 // indirect
 	github.com/valyala/fastjson v1.6.10 // indirect
 	golang.org/x/mod v0.35.0 // indirect

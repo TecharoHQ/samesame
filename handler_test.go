@@ -1,13 +1,16 @@
 package samesame
 
 import (
+	"context"
 	"crypto"
 	"crypto/sha256"
 	"encoding/base64"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -215,5 +218,66 @@ func TestDirectoryHandlerSignatureCache(t *testing.T) {
 	now = now.Add(directorySignatureRefresh + time.Second)
 	if refreshed := sig("a.test"); refreshed == first {
 		t.Error("signatures were not refreshed after the refresh window")
+	}
+}
+
+// A statically served signed directory must pass the same checks as the
+// handler, and only for the authority it was signed for.
+func TestSignStaticDirectory(t *testing.T) {
+	t.Parallel()
+
+	key := mustGenerate(t, "ed25519")
+
+	// static serves a precomputed directory like a file server would.
+	var static atomic.Pointer[StaticDirectory]
+	serve := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sd := static.Load()
+		maps.Copy(w.Header(), sd.Header)
+		w.Write(sd.Body)
+	})
+
+	srv := newTestDirectoryServer(t, serve)
+	other := newTestDirectoryServer(t, serve)
+	authority := strings.TrimPrefix(srv.srv.URL, "https://")
+
+	sd, err := SignStaticDirectory([]crypto.Signer{key}, authority, DirectoryHandlerOptions{})
+	if err != nil {
+		t.Fatalf("SignStaticDirectory: %v", err)
+	}
+	static.Store(sd)
+
+	if want := time.Now().Add(DefaultDirectorySignatureLifetime); sd.Expires.Sub(want).Abs() > time.Minute {
+		t.Errorf("Expires %s, want about %s", sd.Expires, want)
+	}
+	want, err := MarshalDirectory(key.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(sd.Body) != string(want) {
+		t.Errorf("body differs from MarshalDirectory:\n%s\n%s", sd.Body, want)
+	}
+
+	for _, tt := range []struct {
+		name     string
+		srv      *testDirectoryServer
+		wantKeys int
+	}{
+		{name: "signed authority", srv: srv, wantKeys: 1},
+		{name: "another authority", srv: other, wantKeys: 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := fetcherFor(t, tt.srv, FetcherOptions{VerifyDirectorySignatures: true}, nil)
+			dir, err := f.Resolve(context.Background(), tt.srv.identifier(t))
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			if len(dir.Keys) != tt.wantKeys {
+				t.Errorf("want %d keys, got %d: %v", tt.wantKeys, len(dir.Keys), dir.Invalid)
+			}
+		})
+	}
+
+	if _, err := SignStaticDirectory([]crypto.Signer{key}, "Bot.Example", DirectoryHandlerOptions{}); err == nil {
+		t.Error("uppercase authority was accepted")
 	}
 }

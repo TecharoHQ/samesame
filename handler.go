@@ -247,3 +247,61 @@ func etagMatches(ifNoneMatch, etag string) bool {
 	}
 	return false
 }
+
+// StaticDirectory is a key directory with precomputed response signatures,
+// for serving from a static file server.
+type StaticDirectory struct {
+	// Body is the directory JSON, byte for byte what NewDirectoryHandler
+	// serves.
+	Body []byte
+
+	// Header holds the Content-Type, Cache-Control, Content-Digest,
+	// Signature-Input, and Signature fields to send with Body.
+	Header http.Header
+
+	// Expires is when the signatures stop being valid. Generate new ones
+	// before then.
+	Expires time.Time
+}
+
+// SignStaticDirectory signs a key directory for one authority, the host
+// verifiers fetch it from. The signatures cover only that authority and the
+// body's Content-Digest, so they are the same for every request and can be
+// configured as static response headers. opts.Authorities is ignored.
+//
+// The file server must send Body unmodified: compressing it changes the
+// bytes Content-Digest covers.
+func SignStaticDirectory(keys []crypto.Signer, authority string, opts DirectoryHandlerOptions) (*StaticDirectory, error) {
+	if authority != strings.ToLower(authority) {
+		return nil, fmt.Errorf("samesame: authority %q must be lowercase", authority)
+	}
+	opts.Authorities = []string{authority}
+
+	hh, err := NewDirectoryHandler(keys, opts)
+	if err != nil {
+		return nil, err
+	}
+	h := hh.(*directoryHandler)
+
+	now := h.now()
+	req, err := http.NewRequest(http.MethodGet, "https://"+authority+WellKnownPath, nil)
+	if err != nil {
+		return nil, fmt.Errorf("samesame: invalid authority %q: %w", authority, err)
+	}
+	signed, err := h.signatures(authority, req)
+	if err != nil {
+		return nil, err
+	}
+
+	return &StaticDirectory{
+		Body: h.body,
+		Header: http.Header{
+			"Content-Type":    {MediaTypeDirectory},
+			"Cache-Control":   {"public, max-age=" + strconv.Itoa(int(h.maxAge/time.Second))},
+			"Content-Digest":  {h.digest},
+			"Signature-Input": signed.inputs,
+			"Signature":       signed.sigs,
+		},
+		Expires: now.Add(h.lifetime),
+	}, nil
+}

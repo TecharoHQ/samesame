@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/yaronf/httpsign"
@@ -20,6 +21,10 @@ const (
 	// directory.
 	DefaultDirectoryMaxAge = time.Hour
 
+	// directorySignatureRefresh is the longest a cached set of directory
+	// response signatures is reused before signing again.
+	directorySignatureRefresh = time.Hour
+
 	// DefaultDirectorySignatureLifetime is how long directory response
 	// signatures stay valid. Appendix C.8 of the protocol draft recommends
 	// lifetimes well beyond any republication interval.
@@ -28,6 +33,14 @@ const (
 
 // DirectoryHandlerOptions configures NewDirectoryHandler.
 type DirectoryHandlerOptions struct {
+	// Authorities lists the hosts, as sent in the Host header and with any
+	// non-default port, that this directory is served for, such as
+	// "bot.example". Required. Directory response signatures bind the keys
+	// to the request's authority (Appendix B.1), so signing for any Host a
+	// client sends would hand out proofs for other domains. Requests for
+	// other hosts get 421 Misdirected Request.
+	Authorities []string
+
 	// MaxAge is sent as Cache-Control max-age. Defaults to
 	// DefaultDirectoryMaxAge.
 	MaxAge time.Duration
@@ -38,13 +51,27 @@ type DirectoryHandlerOptions struct {
 }
 
 type directoryHandler struct {
-	body      []byte
-	digest    string
-	etag      string
-	maxAge    time.Duration
-	lifetime  time.Duration
-	keyIDs    []string
-	newSigner []newHTTPSigner
+	body        []byte
+	digest      string
+	etag        string
+	maxAge      time.Duration
+	lifetime    time.Duration
+	refresh     time.Duration
+	keyIDs      []string
+	newSigner   []newHTTPSigner
+	authorities map[string]bool
+	now         func() time.Time
+
+	// Signing is the expensive part and the body never changes, so
+	// signatures are cached per authority. The map is bounded by the
+	// Authorities list.
+	mu   sync.Mutex
+	sigs map[string]signedHeaders
+}
+
+type signedHeaders struct {
+	inputs, sigs []string
+	until        time.Time
 }
 
 // NewDirectoryHandler returns an http.Handler that serves the public halves
@@ -64,7 +91,24 @@ func NewDirectoryHandler(keys []crypto.Signer, opts DirectoryHandlerOptions) (ht
 		opts.SignatureLifetime = DefaultDirectorySignatureLifetime
 	}
 
-	h := &directoryHandler{maxAge: opts.MaxAge, lifetime: opts.SignatureLifetime}
+	if len(opts.Authorities) == 0 {
+		return nil, errors.New("samesame: DirectoryHandlerOptions.Authorities is required")
+	}
+
+	h := &directoryHandler{
+		maxAge:      opts.MaxAge,
+		lifetime:    opts.SignatureLifetime,
+		refresh:     min(opts.SignatureLifetime/2, directorySignatureRefresh),
+		authorities: make(map[string]bool, len(opts.Authorities)),
+		now:         time.Now,
+		sigs:        make(map[string]signedHeaders),
+	}
+	for _, a := range opts.Authorities {
+		if a == "" || strings.ContainsAny(a, "/ ") {
+			return nil, fmt.Errorf("samesame: invalid authority %q", a)
+		}
+		h.authorities[strings.ToLower(a)] = true
+	}
 
 	pubs := make([]crypto.PublicKey, 0, len(keys))
 	for i, key := range keys {
@@ -105,6 +149,12 @@ func (h *directoryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	authority := strings.ToLower(r.Host)
+	if !h.authorities[authority] {
+		http.Error(w, "this directory is not served for this host", http.StatusMisdirectedRequest)
+		return
+	}
+
 	hdr := w.Header()
 	hdr.Set("Content-Type", MediaTypeDirectory)
 	hdr.Set("Cache-Control", "public, max-age="+strconv.Itoa(int(h.maxAge/time.Second)))
@@ -119,10 +169,13 @@ func (h *directoryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	hdr.Set("Content-Digest", h.digest)
 
-	if err := h.sign(hdr, r); err != nil {
+	signed, err := h.signatures(authority, r)
+	if err != nil {
 		http.Error(w, "can't sign directory", http.StatusInternalServerError)
 		return
 	}
+	hdr["Signature-Input"] = signed.inputs
+	hdr["Signature"] = signed.sigs
 
 	hdr.Set("Content-Length", strconv.Itoa(len(h.body)))
 	w.WriteHeader(http.StatusOK)
@@ -131,18 +184,31 @@ func (h *directoryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// sign adds one directory response signature per key to hdr. The signature
-// covers the request's authority, so it is computed per request.
-func (h *directoryHandler) sign(hdr http.Header, r *http.Request) error {
+// signatures returns one directory response signature per key for
+// authority, from cache while it is fresh.
+func (h *directoryHandler) signatures(authority string, r *http.Request) (signedHeaders, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	now := h.now()
+	if cached, ok := h.sigs[authority]; ok && now.Before(cached.until) {
+		return cached, nil
+	}
+
+	// Sign for the canonical authority, not whatever case the client used.
+	req := r.Clone(r.Context())
+	req.Host = authority
+
 	res := &http.Response{
 		StatusCode: http.StatusOK,
-		Header:     hdr.Clone(),
+		Header:     http.Header{"Content-Digest": {h.digest}},
 		Body:       io.NopCloser(strings.NewReader("")),
-		Request:    r,
+		Request:    req,
 	}
 
 	fields := httpsign.NewFields().AddRequestComponent("@authority").AddHeader("content-digest")
 
+	var signed signedHeaders
 	for i, newS := range h.newSigner {
 		cfg := httpsign.NewSignConfig().
 			SignAlg(false).
@@ -152,18 +218,20 @@ func (h *directoryHandler) sign(hdr http.Header, r *http.Request) error {
 
 		s, err := newS(cfg, *fields)
 		if err != nil {
-			return err
+			return signedHeaders{}, err
 		}
 
-		in, sig, err := httpsign.SignResponse("binding"+strconv.Itoa(i), *s, res, r)
+		in, sig, err := httpsign.SignResponse("binding"+strconv.Itoa(i), *s, res, req)
 		if err != nil {
-			return err
+			return signedHeaders{}, err
 		}
-		hdr.Add("Signature-Input", in)
-		hdr.Add("Signature", sig)
+		signed.inputs = append(signed.inputs, in)
+		signed.sigs = append(signed.sigs, sig)
 	}
 
-	return nil
+	signed.until = now.Add(h.refresh)
+	h.sigs[authority] = signed
+	return signed, nil
 }
 
 // etagMatches reports whether an If-None-Match value matches etag.

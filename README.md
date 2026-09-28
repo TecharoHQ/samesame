@@ -82,7 +82,10 @@ random nonce.
 ## Serving the key directory
 
 ```go
-h, err := samesame.NewDirectoryHandler([]crypto.Signer{privateKey}, samesame.DirectoryHandlerOptions{})
+h, err := samesame.NewDirectoryHandler([]crypto.Signer{privateKey}, samesame.DirectoryHandlerOptions{
+	// The hosts this directory is served for. Other hosts get 421.
+	Authorities: []string{"bot.example"},
+})
 if err != nil {
 	return err
 }
@@ -92,7 +95,10 @@ mux.Handle(samesame.WellKnownPath, h)
 
 The handler publishes only the public keys. Each response has one
 signature per key, which proves that the operator of that origin holds
-the key.
+the key. The signatures are bound to the requested host, so the handler
+signs only for the hosts in `Authorities`. Otherwise anyone could get
+proofs that bind your keys to their own domain. Signatures are cached per
+host for up to an hour.
 
 ## Managing keys with the CLI
 

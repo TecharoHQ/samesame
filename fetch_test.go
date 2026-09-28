@@ -83,13 +83,38 @@ func fetcherFor(t *testing.T, srv *testDirectoryServer, opts FetcherOptions, now
 	return NewFetcher(opts)
 }
 
+// mustDirectoryHandler returns a directory handler for keys. Test servers
+// get random ports, so it builds a real NewDirectoryHandler for each
+// request's authority on first use, with Authorities set to exactly that
+// host.
 func mustDirectoryHandler(t *testing.T, keys ...crypto.Signer) http.Handler {
 	t.Helper()
-	h, err := NewDirectoryHandler(keys, DirectoryHandlerOptions{})
-	if err != nil {
+
+	// Fail fast on bad keys.
+	if _, err := NewDirectoryHandler(keys, DirectoryHandlerOptions{Authorities: []string{"check.test"}}); err != nil {
 		t.Fatalf("NewDirectoryHandler: %v", err)
 	}
-	return h
+
+	var (
+		mu       sync.Mutex
+		handlers = map[string]http.Handler{}
+	)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		h, ok := handlers[r.Host]
+		if !ok {
+			var err error
+			h, err = NewDirectoryHandler(keys, DirectoryHandlerOptions{Authorities: []string{r.Host}})
+			if err != nil {
+				mu.Unlock()
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			handlers[r.Host] = h
+		}
+		mu.Unlock()
+		h.ServeHTTP(w, r)
+	})
 }
 
 func status(code int) http.Handler {

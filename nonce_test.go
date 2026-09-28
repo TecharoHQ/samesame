@@ -136,21 +136,36 @@ func TestMemoryNonceStoreBoundedUnderFlood(t *testing.T) {
 	}
 }
 
+// Finding the scope to evict from must not scan every scope, or a flood of
+// distinct scopes (as from wildcard subdomains) would make each insert
+// slow. Wall-clock limits are flaky, especially under -race, so compare
+// many scopes against few: a per-eviction scan would make the first
+// hundreds of times slower, while constant-time bookkeeping keeps them
+// close.
 func TestMemoryNonceStoreManyScopes(t *testing.T) {
 	t.Parallel()
 
-	// Many distinct scopes, as from wildcard subdomains, must stay fast.
-	s, now := testNonceStore(1 << 12)
-	until := now.Add(time.Hour)
+	const (
+		size    = 1 << 14
+		inserts = 50_000
+	)
 
-	start := time.Now()
-	for i := range 200_000 {
-		if _, err := s.CheckAndRecord(context.Background(), fmt.Sprint(i%100_000), fmt.Sprint(i), until); err != nil {
-			t.Fatal(err)
+	run := func(scopes int) time.Duration {
+		s, now := testNonceStore(size)
+		until := now.Add(time.Hour)
+		start := time.Now()
+		for i := range inserts {
+			if _, err := s.CheckAndRecord(context.Background(), fmt.Sprint(i%scopes), fmt.Sprint(i), until); err != nil {
+				t.Fatal(err)
+			}
 		}
+		return time.Since(start)
 	}
-	if took := time.Since(start); took > 5*time.Second {
-		t.Errorf("200k inserts took %s", took)
+
+	few := run(8)
+	many := run(inserts) // every insert its own scope
+	if ratio := float64(many) / float64(few); ratio > 10 {
+		t.Errorf("inserts over many scopes took %.1fx as long as over few (%s vs %s)", ratio, many, few)
 	}
 }
 

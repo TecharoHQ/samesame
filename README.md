@@ -94,6 +94,37 @@ The handler publishes only the public keys. Each response has one
 signature per key, which proves that the operator of that origin holds
 the key.
 
+## Managing keys with the CLI
+
+`cmd/samesame` generates keys and the directory to publish for them.
+
+```sh
+go install github.com/TecharoHQ/samesame/cmd/samesame@latest
+
+# Make a key. The key's keyid is printed; the file has mode 0600.
+samesame keygen --out bot.key
+
+# Print the directory JSON to serve at
+# /.well-known/http-message-signatures-directory.
+samesame directory bot.key
+
+# To rotate, publish the new key next to the old one first.
+samesame keygen --alg ecdsa-p256-sha256 --out next.key
+samesame directory bot.key next.key
+
+# Print the keyid of existing private or public PEM keys.
+samesame keyid bot.key next.key
+```
+
+`samesame directory` prints the same JSON that `NewDirectoryHandler` serves.
+If you serve the file from somewhere else, send it with the media type
+`application/http-message-signatures-directory+json`. A static file cannot
+carry the directory response signatures that the handler adds. Verifiers
+are allowed to use keys without those signatures.
+
+In Go, the same operations are `GenerateKey`, `MarshalPrivateKeyPEM`,
+`ParsePrivateKeyPEM`, `PublicJWK`, and `MarshalDirectory`.
+
 ## Not supported yet
 
 - `jwks_uri` and `cimd` members of `Signature-Agent`. The verifier ignores

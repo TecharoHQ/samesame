@@ -7,6 +7,7 @@ tool golang.org/x/tools/cmd/goimports
 require (
 	github.com/dunglas/httpsfv v1.1.1
 	github.com/lestrrat-go/jwx/v4 v4.5.0
+	github.com/urfave/cli/v3 v3.13.0
 	github.com/yaronf/httpsign v0.6.1
 	golang.org/x/sync v0.20.0
 )

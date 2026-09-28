@@ -92,8 +92,8 @@ func keygenCommand() *cli.Command {
 				return err
 			}
 			id, _ := k.KeyID()
-			fmt.Fprintln(cmd.Root().Writer, id)
-			return nil
+			_, err = fmt.Fprintln(cmd.Root().Writer, id)
+			return err
 		},
 	}
 }
@@ -235,7 +235,9 @@ func signedDirectory(cmd *cli.Command, hosts []string) error {
 		body = sd.Body
 
 		if i > 0 {
-			fmt.Fprintln(w)
+			if _, err := fmt.Fprintln(w); err != nil {
+				return err
+			}
 		}
 		format := cmd.String("format")
 		if format == formatNginx || format == formatBoth {
@@ -244,7 +246,9 @@ func signedDirectory(cmd *cli.Command, hosts []string) error {
 			}
 		}
 		if format == formatBoth {
-			fmt.Fprintln(w)
+			if _, err := fmt.Fprintln(w); err != nil {
+				return err
+			}
 		}
 		if format == formatCaddy || format == formatBoth {
 			if err := writeCaddy(w, host, abs, sd); err != nil {
@@ -279,10 +283,12 @@ func keyIDCommand() *cli.Command {
 				}
 				id, _ := k.KeyID()
 
+				line := id + "\t" + path + "\n"
 				if cmd.Args().Len() == 1 {
-					fmt.Fprintln(cmd.Root().Writer, id)
-				} else {
-					fmt.Fprintf(cmd.Root().Writer, "%s\t%s\n", id, path)
+					line = id + "\n"
+				}
+				if _, err := io.WriteString(cmd.Root().Writer, line); err != nil {
+					return err
 				}
 			}
 			return nil
@@ -346,12 +352,13 @@ func writePrivate(path string, data []byte, force bool) error {
 		return err
 	}
 	// O_TRUNC keeps an existing file's mode, so tighten it explicitly.
+	// On failure the write error is what matters; Close is cleanup.
 	if err := f.Chmod(0o600); err != nil {
-		f.Close()
+		_ = f.Close()
 		return err
 	}
 	if _, err := f.Write(data); err != nil {
-		f.Close()
+		_ = f.Close()
 		return err
 	}
 	return f.Close()

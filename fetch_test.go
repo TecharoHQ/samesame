@@ -256,7 +256,7 @@ func TestFetcherFailures(t *testing.T) {
 			name: "wrong content type",
 			handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
-				io.WriteString(w, `{"keys":[]}`)
+				_, _ = io.WriteString(w, `{"keys":[]}`)
 			}),
 			err: ErrNotADirectory,
 		},
@@ -270,7 +270,7 @@ func TestFetcherFailures(t *testing.T) {
 			name: "malformed directory",
 			handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", MediaTypeDirectory)
-				io.WriteString(w, `{"keys":`)
+				_, _ = io.WriteString(w, `{"keys":`)
 			}),
 			err: ErrMalformedDirectory,
 		},
@@ -376,7 +376,7 @@ func TestFetcherVerifyDirectorySignatures(t *testing.T) {
 						w.Header()[k] = v
 					}
 				}
-				w.Write(rec.Body.Bytes())
+				_, _ = w.Write(rec.Body.Bytes())
 			}),
 		},
 		{
@@ -386,7 +386,7 @@ func TestFetcherVerifyDirectorySignatures(t *testing.T) {
 				good.ServeHTTP(rec, r)
 				maps.Copy(w.Header(), rec.Header())
 				w.Header().Del("Content-Length")
-				w.Write([]byte(strings.Replace(rec.Body.String(), `"keys":[`, `"keys":[`+`{"kty":"EC","crv":"P-256","x":"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU","y":"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"},`, 1)))
+				_, _ = w.Write([]byte(strings.Replace(rec.Body.String(), `"keys":[`, `"keys":[`+`{"kty":"EC","crv":"P-256","x":"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU","y":"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"},`, 1)))
 			}),
 		},
 		{
@@ -400,7 +400,7 @@ func TestFetcherVerifyDirectorySignatures(t *testing.T) {
 				mustDirectoryHandler(t, mustGenerate(t, "ed25519")).ServeHTTP(forged, r)
 				maps.Copy(w.Header(), rec.Header())
 				w.Header()["Signature"] = forged.Header()["Signature"]
-				w.Write(rec.Body.Bytes())
+				_, _ = w.Write(rec.Body.Bytes())
 			}),
 		},
 	} {
@@ -666,7 +666,7 @@ func TestFetcherConcurrencyLimit(t *testing.T) {
 		MaxConcurrentFetches:  1,
 	})
 
-	go f.Resolve(context.Background(), slow.identifier(t))
+	go func() { _, _ = f.Resolve(context.Background(), slow.identifier(t)) }()
 	for slow.hits.Load() == 0 {
 		time.Sleep(5 * time.Millisecond)
 	}

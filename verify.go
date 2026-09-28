@@ -402,7 +402,7 @@ func (v *Verifier) verifyOne(r *http.Request, sigInputs *httpsfv.Dictionary, age
 // a static key may verify it, identified only by thumbprint (protocol draft
 // Sections 4.3 and 6.10).
 func (v *Verifier) resolveKey(ctx context.Context, label, keyID string, member *AgentMember, now time.Time) (Key, *url.URL, *VerifyError) {
-	var why error = fmt.Errorf("%w: no Signature-Agent covered and keyid %q is not a static key", ErrKeyUnknown, keyID)
+	why := fmt.Errorf("%w: no Signature-Agent covered and keyid %q is not a static key", ErrKeyUnknown, keyID)
 
 	switch {
 	case member == nil:

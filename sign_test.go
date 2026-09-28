@@ -371,7 +371,7 @@ func TestSignerTransport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Do: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if req.Header.Get("Signature") != "" || req.Header.Get(HeaderSignatureAgent) != "" {
 		t.Error("Transport modified the caller's request")

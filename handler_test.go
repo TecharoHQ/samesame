@@ -233,7 +233,7 @@ func TestSignStaticDirectory(t *testing.T) {
 	serve := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sd := static.Load()
 		maps.Copy(w.Header(), sd.Header)
-		w.Write(sd.Body)
+		_, _ = w.Write(sd.Body)
 	})
 
 	srv := newTestDirectoryServer(t, serve)

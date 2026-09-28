@@ -172,7 +172,7 @@ func (ds *directoryServer) watch(ctx context.Context, poll, debounce time.Durati
 	if err != nil {
 		return err
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	// Watch the folder rather than the files, so editors that save by
 	// renaming and symlink swaps (as in Kubernetes ConfigMaps) are seen.

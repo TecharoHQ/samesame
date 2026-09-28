@@ -372,7 +372,9 @@ func (f *Fetcher) fetch(ctx context.Context, identifier *url.URL, etag, lastModi
 	if err != nil {
 		return result, fmt.Errorf("%w: %s: %w", ErrFetchFailed, identifier, err)
 	}
-	defer resp.Body.Close()
+	// Close only releases the connection; the body is fully read or
+	// discarded by then.
+	defer func() { _ = resp.Body.Close() }()
 
 	result.retryAfter = parseRetryAfter(resp.Header.Get("Retry-After"), f.opts.Now())
 

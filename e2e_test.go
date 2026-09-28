@@ -49,7 +49,7 @@ func TestEndToEnd(t *testing.T) {
 			http.Error(w, err.Error(), StatusCode(err))
 			return
 		}
-		io.WriteString(w, res.Identifier.String()+" "+res.KeyID)
+		_, _ = io.WriteString(w, res.Identifier.String()+" "+res.KeyID)
 	}))
 	t.Cleanup(origin.Close)
 
@@ -69,7 +69,7 @@ func TestEndToEnd(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GET: %v", err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		body, _ := io.ReadAll(resp.Body)
 		return resp.StatusCode, strings.TrimSpace(string(body)), resp.Header
 	}
@@ -120,7 +120,7 @@ func TestEndToEnd(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GET: %v", err)
 			}
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			codes[i] = resp.StatusCode
 		}
 		if codes[0] != http.StatusOK || codes[1] != http.StatusTooManyRequests {
